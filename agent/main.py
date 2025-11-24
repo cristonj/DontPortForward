@@ -1,6 +1,7 @@
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
+from firebase_admin import storage
 import threading
 import time
 import subprocess
@@ -18,6 +19,7 @@ load_dotenv()
 PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
 IDLE_TIMEOUT = 300  # 5 minutes
+SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
 
 # Initialize Firebase
 try:
@@ -28,11 +30,87 @@ try:
     
     firebase_admin.initialize_app(cred, {
         'projectId': PROJECT_ID,
+        'storageBucket': os.getenv("FIREBASE_STORAGE_BUCKET") # Expect this env var or we need to hardcode if provided in web
     })
     db = firestore.client()
 except Exception as e:
     print(f"Error initializing Firebase: {e}")
     pass
+
+class FileSyncer(threading.Thread):
+    def __init__(self, device_id):
+        super().__init__()
+        self.device_id = device_id
+        self.should_stop = False
+        self.local_path = SHARED_FOLDER_PATH
+        if not os.path.exists(self.local_path):
+            os.makedirs(self.local_path)
+
+    def run(self):
+        bucket = storage.bucket()
+        prefix = f"agents/{self.device_id}/shared/"
+        
+        while not self.should_stop:
+            try:
+                # print("Checking for file updates...")
+                blobs = list(bucket.list_blobs(prefix=prefix))
+                
+                # Remote -> Local Sync
+                for blob in blobs:
+                    filename = os.path.basename(blob.name)
+                    if not filename: continue # Skip directory marker if any
+                    
+                    local_file_path = os.path.join(self.local_path, filename)
+                    
+                    download = False
+                    if not os.path.exists(local_file_path):
+                        download = True
+                        print(f"New file found: {filename}")
+                    else:
+                        # Check modification time
+                        # Cloud Storage uses updated time
+                        remote_mtime = blob.updated.timestamp()
+                        local_mtime = os.path.getmtime(local_file_path)
+                        # We allow some drift, or just strict newer
+                        if remote_mtime > local_mtime:
+                            download = True
+                            print(f"File updated: {filename}")
+                    
+                    if download:
+                        print(f"Downloading {filename}...")
+                        blob.download_to_filename(local_file_path)
+                        # Touch local file to match remote time to avoid loop? 
+                        # Or just accept that next check local_mtime will be now.
+                        # If we set local_mtime to remote_mtime, it handles it.
+                        os.utime(local_file_path, (remote_mtime, remote_mtime))
+
+                # Local -> Remote Sync (Optional, implementing Delete if remote deleted?)
+                # For now, let's keep it additive/update from remote as source of truth.
+                # If we want exact copy, we should delete local files not in remote.
+                
+                remote_filenames = {os.path.basename(b.name) for b in blobs if os.path.basename(b.name)}
+                local_filenames = set(os.listdir(self.local_path))
+                
+                for filename in local_filenames:
+                    if filename not in remote_filenames:
+                        # Only delete if it's not a temporary file or something
+                        # Assume managed folder
+                        print(f"File deleted remotely, removing local: {filename}")
+                        try:
+                            os.remove(os.path.join(self.local_path, filename))
+                        except Exception as e:
+                            print(f"Error deleting {filename}: {e}")
+
+            except Exception as e:
+                print(f"Error in FileSyncer: {e}")
+            
+            # Sleep
+            for _ in range(10): 
+                if self.should_stop: break
+                time.sleep(1)
+
+    def stop(self):
+        self.should_stop = True
 
 class CommandExecutor(threading.Thread):
     def __init__(self, cmd_id, cmd_data, device_ref):
@@ -98,7 +176,8 @@ class CommandExecutor(threading.Thread):
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__)) # Set CWD to agent dir so 'shared/script.py' works
             )
             
             # Start reader threads
@@ -215,6 +294,7 @@ class Agent:
         self.watch = None
         self.active_commands = {} # cmd_id -> CommandExecutor
         self.last_activity_time = time.time()
+        self.file_syncer = FileSyncer(device_id)
 
     def get_git_info(self):
         """Collect git status information."""
@@ -319,6 +399,7 @@ class Agent:
     def listen_for_commands(self):
         self.last_activity_time = time.time()
         self.start_watching()
+        self.file_syncer.start()
         
         while self.running:
             current_time = time.time()
@@ -351,6 +432,10 @@ class Agent:
                 else:
                     self.send_heartbeat()
                     time.sleep(60)
+        
+        # Cleanup
+        self.file_syncer.stop()
+        self.file_syncer.join()
 
     def on_command_snapshot(self, col_snapshot, changes, read_time):
         for change in changes:

@@ -1,0 +1,171 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { storage } from "../../lib/firebase";
+import { 
+  ref, 
+  listAll, 
+  uploadBytes, 
+  getDownloadURL, 
+  deleteObject,
+  StorageReference
+} from "firebase/storage";
+
+interface SharedFolderProps {
+  deviceId: string;
+}
+
+interface FileItem {
+  name: string;
+  fullPath: string;
+  ref: StorageReference;
+}
+
+export default function SharedFolder({ deviceId }: SharedFolderProps) {
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const fetchFiles = async () => {
+    if (!deviceId) return;
+    setLoading(true);
+    try {
+      const listRef = ref(storage, `agents/${deviceId}/shared`);
+      const res = await listAll(listRef);
+      const fileItems = res.items.map((itemRef) => ({
+        name: itemRef.name,
+        fullPath: itemRef.fullPath,
+        ref: itemRef,
+      }));
+      setFiles(fileItems);
+    } catch (error) {
+      console.error("Error fetching files:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFiles();
+  }, [deviceId]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    
+    setUploading(true);
+    try {
+      const storageRef = ref(storage, `agents/${deviceId}/shared/${file.name}`);
+      await uploadBytes(storageRef, file);
+      await fetchFiles();
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      alert("Failed to upload file");
+    } finally {
+      setUploading(false);
+      // Reset input
+      e.target.value = "";
+    }
+  };
+
+  const handleDownload = async (fileItem: FileItem) => {
+    try {
+      const url = await getDownloadURL(fileItem.ref);
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error("Error getting download URL:", error);
+    }
+  };
+
+  const handleDelete = async (fileItem: FileItem) => {
+    if (!confirm(`Are you sure you want to delete ${fileItem.name}?`)) return;
+    try {
+      await deleteObject(fileItem.ref);
+      await fetchFiles();
+    } catch (error) {
+      console.error("Error deleting file:", error);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-gray-950 p-4 font-mono text-sm">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-gray-200 font-bold">Shared Folder</h2>
+        <div className="flex gap-2">
+            <button 
+                onClick={fetchFiles}
+                className="p-2 text-gray-400 hover:text-white bg-gray-900 rounded border border-gray-800"
+                title="Refresh"
+            >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+            </button>
+            <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded flex items-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            <span>{uploading ? "Uploading..." : "Upload File"}</span>
+            <input 
+                type="file" 
+                className="hidden" 
+                onChange={handleUpload} 
+                disabled={uploading}
+            />
+            </label>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto border border-gray-800 rounded-lg bg-gray-900/30">
+        {loading ? (
+          <div className="p-4 text-gray-500">Loading files...</div>
+        ) : files.length === 0 ? (
+          <div className="p-4 text-gray-500 italic">No files in shared folder. Upload one to get started.</div>
+        ) : (
+          <table className="w-full text-left">
+            <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">
+              <tr>
+                <th className="px-4 py-3 font-medium">Filename</th>
+                <th className="px-4 py-3 font-medium text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {files.map((file) => (
+                <tr key={file.fullPath} className="hover:bg-gray-800/50 transition-colors">
+                  <td className="px-4 py-3 text-gray-300">
+                    <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        {file.name}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-2">
+                        <button
+                        onClick={() => handleDownload(file)}
+                        className="text-blue-400 hover:text-blue-300 px-2 py-1 hover:bg-blue-900/20 rounded text-xs"
+                        >
+                        Download
+                        </button>
+                        <button
+                        onClick={() => handleDelete(file)}
+                        className="text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-900/20 rounded text-xs"
+                        >
+                        Delete
+                        </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      
+      <div className="mt-3 text-xs text-gray-500">
+        Files uploaded here are synced to the agent's <code className="bg-gray-800 px-1 py-0.5 rounded text-gray-300">shared/</code> folder.
+      </div>
+    </div>
+  );
+}
