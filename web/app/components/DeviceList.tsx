@@ -9,6 +9,7 @@ interface Device {
   hostname: string;
   ip: string;
   status: string;
+  platform?: string;
   last_seen: any;
   stats?: {
     cpu_percent: number;
@@ -19,9 +20,36 @@ interface Device {
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;
   selectedDeviceId?: string;
+  className?: string;
 }
 
-export default function DeviceList({ onSelectDevice, selectedDeviceId }: DeviceListProps) {
+const WindowsIcon = () => (
+  <svg viewBox="0 0 88 88" className="w-4 h-4 text-blue-400 shrink-0" fill="currentColor">
+    <path d="M0 12.402l35.687-4.86.016 34.423-35.67.203zm35.67 33.529l.028 34.453L.028 75.48.01 46.12zm4.355-38.66l47.961-6.78v41.36l-47.961.275zm47.947 38.83l-.03 41.51-47.93-6.843.016-34.413z"/>
+  </svg>
+);
+
+const LinuxIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-4 h-4 text-yellow-500 shrink-0" fill="currentColor">
+    <path d="M20 19v-8c0-1.1-.9-2-2-2h-3.5l-2.5-3-2.5 3H6c-1.1 0-2 .9-2 2v8h16zM6 11h3.5l2.5-3 2.5 3H18v8H6v-8z" />
+  </svg>
+);
+
+const AppleIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-4 h-4 text-gray-300 shrink-0" fill="currentColor">
+    <path d="M17.3 7c.7-1.3 1.4-1.6 1.3-3-.6.1-1.3.6-1.9 1.3-.7.7-1.1 1.6-1 2.5 1 .1 1.6-.4 2.2-1.2zM12.6 19.8c.8 1.1 1.6 1.2 2.7.6.6-.3 1.3-.4 1.9 0 1.1.7 1.9.6 2.7-.6 1.7-2.5 2.4-5.2 1-7.7-1-1.7-2.8-2.7-4.5-2.6-1.7.1-3 1-3.9 1-.9 0-2.3-1-3.6-1-1.8 0-3.6 1.1-4.6 2.8-1.9 3.4-.2 8.4 1.8 11.2.9 1.4 2.1 3 3.5 3 .9 0 1.9-.4 3-.7z"/>
+  </svg>
+);
+
+const DefaultIcon = () => (
+   <svg viewBox="0 0 24 24" className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+       <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+       <line x1="8" y1="21" x2="16" y2="21" />
+       <line x1="12" y1="17" x2="12" y2="21" />
+   </svg>
+);
+
+export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "" }: DeviceListProps) {
   const [devices, setDevices] = useState<Device[]>([]);
 
   useEffect(() => {
@@ -42,15 +70,22 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId }: DeviceL
     return () => unsubscribe();
   }, []);
 
+  const getIcon = (platform?: string) => {
+    if (!platform) return <DefaultIcon />;
+    const p = platform.toLowerCase();
+    if (p.includes("win")) return <WindowsIcon />;
+    if (p.includes("linux")) return <LinuxIcon />;
+    if (p.includes("darwin") || p.includes("mac")) return <AppleIcon />;
+    return <DefaultIcon />;
+  };
+
   return (
-    <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col h-full overflow-hidden shrink-0">
+    <div className={`w-64 bg-gray-900 border-r border-gray-800 flex flex-col h-full overflow-hidden shrink-0 ${className}`}>
       <div className="p-4 border-b border-gray-800">
         <h2 className="font-bold text-gray-200">Devices</h2>
       </div>
       <div className="flex-1 overflow-y-auto">
         {devices.map(device => {
-            // Check if device is effectively offline (no update in > 2 mins)
-            // Ideally we compare timestamps, but for now we trust the status or just show it.
             return (
             <button
               key={device.id}
@@ -60,16 +95,19 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId }: DeviceL
               }`}
             >
               <div className="flex justify-between items-center mb-1">
-                <span className="font-semibold text-gray-300 truncate w-32" title={device.hostname || device.id}>
-                    {device.hostname || device.id}
-                </span>
-                <span className={`w-2 h-2 rounded-full ${
-                   device.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
-                }`} />
+                <div className="flex items-center gap-2 w-full">
+                    {getIcon(device.platform)}
+                    <span className="font-semibold text-gray-300 truncate flex-1" title={device.hostname || device.id}>
+                        {device.hostname || device.id}
+                    </span>
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${
+                       device.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                    }`} />
+                </div>
               </div>
-              <div className="text-xs text-gray-500 mb-1 truncate">{device.ip}</div>
+              <div className="text-xs text-gray-500 mb-1 truncate pl-6">{device.ip}</div>
               {device.stats && (
-                  <div className="flex gap-2 text-xs text-gray-400">
+                  <div className="flex gap-2 text-xs text-gray-400 pl-6">
                       <span title="CPU">C: {Math.round(device.stats.cpu_percent)}%</span>
                       <span title="Memory">M: {Math.round(device.stats.memory_percent)}%</span>
                   </div>
