@@ -18,6 +18,7 @@ load_dotenv()
 # TODO: Load from config file or env vars
 PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
+IDLE_TIMEOUT = 300  # 5 minutes
 
 # Initialize Firebase
 # Note: For production, we'll need a way to authenticate. 
@@ -43,6 +44,8 @@ class Agent:
         self.device_id = device_id
         self.running = True
         self.doc_ref = db.collection('devices').document(self.device_id)
+        self.watch = None
+        self.last_activity_time = time.time()
 
     def register(self):
         """Register the device in Firestore."""
@@ -85,24 +88,76 @@ class Agent:
         except:
             return "127.0.0.1"
 
-    def listen_for_commands(self):
-        """Listen for new commands in the commands subcollection."""
-        # Using a snapshot listener
-        commands_ref = self.doc_ref.collection('commands').where('status', '==', 'pending')
-        commands_watch = commands_ref.on_snapshot(self.on_command_snapshot)
-        
-        while self.running:
-            # Heartbeat and Stats
+    def start_watching(self):
+        """Start real-time listener for commands."""
+        if not self.watch:
+             print("Starting real-time listener...")
+             commands_ref = self.doc_ref.collection('commands').where('status', '==', 'pending')
+             self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
+
+    def stop_watching(self):
+        """Stop real-time listener."""
+        if self.watch:
+            print("Stopping real-time listener...")
+            self.watch.unsubscribe()
+            self.watch = None
+
+    def has_pending_commands(self):
+        """Check if there are any pending commands (poll)."""
+        try:
+            docs = self.doc_ref.collection('commands').where('status', '==', 'pending').limit(1).get()
+            return len(list(docs)) > 0
+        except Exception as e:
+            print(f"Error checking for pending commands: {e}")
+            return False
+
+    def send_heartbeat(self):
+        """Send heartbeat and stats to Firestore."""
+        try:
             stats = self.collect_stats()
             self.doc_ref.update({
                 'last_seen': firestore.SERVER_TIMESTAMP,
-                'stats': stats
+                'stats': stats,
+                'mode': 'active' if self.watch else 'sleep'
             })
-            time.sleep(10) # Update stats every 10 seconds
+        except Exception as e:
+            print(f"Error sending heartbeat: {e}")
+
+    def listen_for_commands(self):
+        """Listen for new commands and handle sleep/active modes."""
+        self.last_activity_time = time.time()
+        
+        # Start in active mode
+        self.start_watching()
+        
+        while self.running:
+            current_time = time.time()
+            idle_time = current_time - self.last_activity_time
+            
+            if self.watch: # Active Mode
+                if idle_time > IDLE_TIMEOUT:
+                    print(f"No activity for {IDLE_TIMEOUT}s. Entering sleep mode...")
+                    self.stop_watching()
+                else:
+                    # Heartbeat every 10s
+                    self.send_heartbeat()
+                    time.sleep(10)
+            else: # Sleep Mode
+                # Poll for existence of pending commands
+                if self.has_pending_commands():
+                    print("Activity detected via poll. Waking up...")
+                    self.last_activity_time = time.time()
+                    self.start_watching()
+                    # The watcher will fire immediately for the pending commands
+                else:
+                    # Heartbeat every 60s (slower)
+                    self.send_heartbeat()
+                    time.sleep(60)
 
     def on_command_snapshot(self, col_snapshot, changes, read_time):
         for change in changes:
             if change.type.name == 'ADDED':
+                self.last_activity_time = time.time()
                 cmd_doc = change.document
                 cmd_data = cmd_doc.to_dict()
                 print(f"Received command: {cmd_data}")
@@ -115,10 +170,13 @@ class Agent:
         print(f"Executing: {command_str} (Type: {command_type})")
         
         # Mark as processing
-        self.doc_ref.collection('commands').document(cmd_id).update({
-            'status': 'processing',
-            'started_at': firestore.SERVER_TIMESTAMP
-        })
+        try:
+            self.doc_ref.collection('commands').document(cmd_id).update({
+                'status': 'processing',
+                'started_at': firestore.SERVER_TIMESTAMP
+            })
+        except Exception as e:
+             print(f"Error updating command status: {e}")
 
         output = ""
         error = ""
@@ -159,13 +217,18 @@ class Agent:
             return_code = -1
 
         # Update result
-        self.doc_ref.collection('commands').document(cmd_id).update({
-            'status': 'completed',
-            'output': output,
-            'error': error,
-            'return_code': return_code,
-            'completed_at': firestore.SERVER_TIMESTAMP
-        })
+        try:
+            self.doc_ref.collection('commands').document(cmd_id).update({
+                'status': 'completed',
+                'output': output,
+                'error': error,
+                'return_code': return_code,
+                'completed_at': firestore.SERVER_TIMESTAMP
+            })
+        except Exception as e:
+             print(f"Error updating command result: {e}")
+
+        self.last_activity_time = time.time() # Update activity after completion too
 
         if should_restart:
             print("Restarting agent as requested...")
@@ -176,4 +239,3 @@ if __name__ == "__main__":
     agent = Agent(DEVICE_ID)
     agent.register()
     agent.listen_for_commands()
-
