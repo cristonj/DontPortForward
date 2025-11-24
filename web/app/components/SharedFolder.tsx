@@ -159,13 +159,13 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-950 p-4 font-mono text-sm">
-      <div className="flex justify-between items-center mb-4">
+    <div className="flex flex-col h-full bg-gray-950 p-4 font-mono text-sm overflow-hidden">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3 sm:gap-0">
         <h2 className="text-gray-200 font-bold">Shared Folder</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 w-full sm:w-auto justify-end">
             <button 
                 onClick={fetchFiles}
-                className="p-2 text-gray-400 hover:text-white bg-gray-900 rounded border border-gray-800"
+                className="p-2 text-gray-400 hover:text-white bg-gray-900 rounded border border-gray-800 shrink-0"
                 title="Refresh"
             >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,18 +174,19 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
             </button>
             <button
                 onClick={() => setIsCreatingFile(true)}
-                className="bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded flex items-center gap-2 border border-gray-700"
+                className="bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded flex items-center gap-2 border border-gray-700 text-xs sm:text-sm shrink-0"
             >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                <span>New File</span>
+                <span className="hidden xs:inline">New File</span>
+                <span className="xs:hidden">New</span>
             </button>
-            <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded flex items-center gap-2">
+            <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded flex items-center gap-2 text-xs sm:text-sm shrink-0">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
-            <span>{uploading ? "Uploading..." : "Upload File"}</span>
+            <span>{uploading ? "Uploading..." : "Upload"}</span>
             <input 
                 type="file" 
                 className="hidden" 
@@ -251,32 +252,32 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto border border-gray-800 rounded-lg bg-gray-900/30">
+      <div className="flex-1 overflow-y-auto border border-gray-800 rounded-lg bg-gray-900/30 scrollbar-thin scrollbar-thumb-gray-800">
         {loading ? (
           <div className="p-4 text-gray-500">Loading files...</div>
         ) : files.length === 0 ? (
           <div className="p-4 text-gray-500 italic">No files in shared folder. Upload one to get started.</div>
         ) : (
-          <table className="w-full text-left">
-            <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase sticky top-0 z-10 backdrop-blur-sm">
               <tr>
-                <th className="px-4 py-3 font-medium">Filename</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th className="px-4 py-3 font-medium border-b border-gray-800">Filename</th>
+                <th className="px-4 py-3 font-medium text-right border-b border-gray-800">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {files.map((file) => (
-                <tr key={file.fullPath} className="hover:bg-gray-800/50 transition-colors">
-                  <td className="px-4 py-3 text-gray-300">
+                <tr key={file.fullPath} className="hover:bg-gray-800/50 transition-colors group">
+                  <td className="px-4 py-3 text-gray-300 max-w-[150px] sm:max-w-xs truncate">
                     <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
-                        {file.name}
+                        <span className="truncate" title={file.name}>{file.name}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <div className="flex justify-end gap-1 sm:gap-2">
                         {file.name.endsWith('.py') && onRunCommand && (
                             <button
                                 onClick={() => handleRunFile(file)}
@@ -284,26 +285,32 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
                                 title="Run Python Script"
                             >
                                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
-                                Run
+                                <span className="hidden sm:inline">Run</span>
                             </button>
                         )}
                         <button
                         onClick={() => handleEditFile(file)}
                         className="text-yellow-400 hover:text-yellow-300 px-2 py-1 hover:bg-yellow-900/20 rounded text-xs"
+                        title="Edit"
                         >
-                        Edit
+                        <span className="hidden sm:inline">Edit</span>
+                        <svg className="w-3 h-3 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                         </button>
                         <button
                         onClick={() => handleDownload(file)}
                         className="text-blue-400 hover:text-blue-300 px-2 py-1 hover:bg-blue-900/20 rounded text-xs"
+                        title="Download"
                         >
-                        Download
+                        <span className="hidden sm:inline">Download</span>
+                        <svg className="w-3 h-3 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                         </button>
                         <button
                         onClick={() => handleDelete(file)}
                         className="text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-900/20 rounded text-xs"
+                        title="Delete"
                         >
-                        Delete
+                        <span className="hidden sm:inline">Delete</span>
+                        <svg className="w-3 h-3 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
                     </div>
                   </td>

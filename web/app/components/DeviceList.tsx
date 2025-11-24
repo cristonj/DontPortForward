@@ -84,7 +84,7 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
       <div className="p-4 border-b border-gray-800 shrink-0 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
         <h2 className="font-bold text-gray-200 text-sm uppercase tracking-wider">Devices</h2>
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-800">
+      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-800 pb-20 md:pb-0">
         {devices.map(device => {
             return (
             <button

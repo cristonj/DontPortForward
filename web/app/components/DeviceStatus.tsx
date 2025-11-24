@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 
 interface GitInfo {
   branch: string;
@@ -30,6 +30,8 @@ interface Device {
   stats?: DeviceStats;
   git?: GitInfo;
   mode?: string;
+  polling_rate?: number;
+  sleep_polling_rate?: number;
 }
 
 interface DeviceStatusProps {
@@ -39,6 +41,7 @@ interface DeviceStatusProps {
 export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   const [device, setDevice] = useState<Device | null>(null);
   const [loading, setLoading] = useState(true);
+  const [localPollingRate, setLocalPollingRate] = useState<number | null>(null);
 
   useEffect(() => {
     if (!deviceId) {
@@ -48,7 +51,12 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
 
     const unsub = onSnapshot(doc(db, "devices", deviceId), (doc) => {
         if (doc.exists()) {
-            setDevice({ id: doc.id, ...doc.data() } as Device);
+            const data = doc.data() as Device;
+            setDevice({ id: doc.id, ...data });
+            // Only update local state if not interacting or on first load
+            if (localPollingRate === null && data.polling_rate) {
+                setLocalPollingRate(data.polling_rate);
+            }
         } else {
             setDevice(null);
         }
@@ -56,7 +64,33 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
     });
 
     return () => unsub();
-  }, [deviceId]);
+  }, [deviceId]); // Removed localPollingRate dependency to prevent loop
+
+  // Sync local polling rate when device data updates, but only if we don't have one set yet (handled above)
+  // Actually, better to just use key/id approach or let user drive input. 
+  // If external update happens, we should probably reflect it unless user is dragging.
+  
+  useEffect(() => {
+      if (device?.polling_rate) {
+          setLocalPollingRate(prev => prev === null ? device.polling_rate! : prev);
+      }
+  }, [device?.polling_rate]);
+
+  const handlePollingChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = parseInt(e.target.value);
+      setLocalPollingRate(val);
+  };
+
+  const commitPollingChange = async () => {
+      if (!device || localPollingRate === null) return;
+      try {
+          await updateDoc(doc(db, "devices", deviceId), {
+              polling_rate: localPollingRate
+          });
+      } catch (error) {
+          console.error("Error updating polling rate:", error);
+      }
+  };
 
   if (!deviceId) return <div className="h-full flex items-center justify-center text-gray-500">Select a device to view status.</div>;
   if (loading) return <div className="h-full flex items-center justify-center text-gray-500 animate-pulse">Loading device status...</div>;
@@ -81,39 +115,42 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-800">
+    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 pb-20 sm:pb-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 border-b border-gray-800 pb-6">
-        <div>
-            <div className="flex items-center gap-3 flex-wrap">
-                <h2 className="text-2xl font-bold text-white tracking-tight">
-                    {device.hostname || device.id}
-                </h2>
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${
-                    device.status === 'online' 
-                    ? 'bg-green-500/10 text-green-400 border-green-500/20 shadow-[0_0_10px_rgba(34,197,94,0.1)]' 
-                    : 'bg-red-500/10 text-red-400 border-red-500/20'
-                }`}>
-                    {device.status?.toUpperCase() || 'UNKNOWN'}
-                </span>
+      <div className="flex flex-col gap-4 border-b border-gray-800 pb-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div>
+                <div className="flex items-center gap-3 flex-wrap">
+                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight break-all">
+                        {device.hostname || device.id}
+                    </h2>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border shrink-0 ${
+                        device.status === 'online' 
+                        ? 'bg-green-500/10 text-green-400 border-green-500/20 shadow-[0_0_10px_rgba(34,197,94,0.1)]' 
+                        : 'bg-red-500/10 text-red-400 border-red-500/20'
+                    }`}>
+                        {device.status?.toUpperCase() || 'UNKNOWN'}
+                    </span>
+                </div>
+                <div className="text-gray-500 text-xs mt-1.5 font-mono break-all">{device.id}</div>
             </div>
-            <div className="text-gray-500 text-xs mt-1.5 font-mono break-all">{device.id}</div>
-        </div>
-        <div className="flex flex-col sm:text-right text-xs text-gray-400 gap-1 bg-gray-900/50 p-3 rounded-lg sm:bg-transparent sm:p-0">
-            <div className="flex justify-between sm:justify-end gap-4">
-                <span className="text-gray-500">Last Seen:</span> 
-                <span className="font-mono">{formatDate(device.last_seen)}</span>
-            </div>
-            <div className="flex justify-between sm:justify-end gap-4">
-                <span className="text-gray-500">Mode:</span> 
-                <span className="text-blue-400 font-medium uppercase tracking-wider">{device.mode || 'unknown'}</span>
+            
+            <div className="flex flex-row sm:flex-col justify-between sm:justify-start text-xs text-gray-400 gap-1 bg-gray-900/50 p-3 rounded-lg sm:bg-transparent sm:p-0 border sm:border-0 border-gray-800">
+                <div className="flex flex-col sm:flex-row sm:justify-end gap-1 sm:gap-4">
+                    <span className="text-gray-500">Last Seen:</span> 
+                    <span className="font-mono text-gray-300">{formatDate(device.last_seen)}</span>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:justify-end gap-1 sm:gap-4">
+                    <span className="text-gray-500">Mode:</span> 
+                    <span className="text-blue-400 font-medium uppercase tracking-wider">{device.mode || 'unknown'}</span>
+                </div>
             </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
           {/* System Info */}
-          <div className="bg-gray-900/50 p-5 rounded-xl border border-gray-800 backdrop-blur-sm">
+          <div className="bg-gray-900/50 p-4 sm:p-5 rounded-xl border border-gray-800 backdrop-blur-sm">
               <h3 className="text-base font-semibold text-blue-400 mb-4 flex items-center gap-2 uppercase tracking-wider text-xs">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
                   System Information
@@ -121,19 +158,38 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
               <dl className="space-y-3 text-sm">
                   <div className="flex justify-between border-b border-gray-800/50 pb-2 last:border-0 last:pb-0">
                       <dt className="text-gray-500">OS</dt>
-                      <dd className="text-gray-200 font-medium text-right">{device.platform} {device.release}</dd>
+                      <dd className="text-gray-200 font-medium text-right truncate ml-4">{device.platform} {device.release}</dd>
                   </div>
                   <div className="flex justify-between border-b border-gray-800/50 pb-2 last:border-0 last:pb-0">
                       <dt className="text-gray-500">Version</dt>
-                      <dd className="text-gray-200 font-medium text-right">{device.version}</dd>
+                      <dd className="text-gray-200 font-medium text-right truncate ml-4">{device.version}</dd>
                   </div>
                   <div className="flex justify-between border-b border-gray-800/50 pb-2 last:border-0 last:pb-0">
                       <dt className="text-gray-500">IP Address</dt>
-                      <dd className="text-gray-200 font-mono text-right">{device.ip}</dd>
+                      <dd className="text-gray-200 font-mono text-right truncate ml-4">{device.ip}</dd>
                   </div>
                   <div className="flex justify-between border-b border-gray-800/50 pb-2 last:border-0 last:pb-0">
                       <dt className="text-gray-500">Uptime</dt>
-                      <dd className="text-gray-200 font-medium text-right">{device.stats ? formatUptime(device.stats.boot_time) : 'N/A'}</dd>
+                      <dd className="text-gray-200 font-medium text-right truncate ml-4">{device.stats ? formatUptime(device.stats.boot_time) : 'N/A'}</dd>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 border-t border-gray-800/50 mt-2">
+                      <dt className="text-gray-500">Polling Rate</dt>
+                      <dd className="text-right w-1/2">
+                          <div className="flex items-center gap-2 justify-end">
+                              <input 
+                                  type="range" 
+                                  min="1" 
+                                  max="60" 
+                                  step="1"
+                                  value={localPollingRate ?? device.polling_rate ?? 10}
+                                  onChange={handlePollingChange}
+                                  onMouseUp={commitPollingChange}
+                                  onTouchEnd={commitPollingChange}
+                                  className="w-20 sm:w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                              />
+                              <span className="text-gray-200 font-mono w-8 text-right text-xs sm:text-sm">{localPollingRate ?? device.polling_rate ?? 10}s</span>
+                          </div>
+                      </dd>
                   </div>
               </dl>
           </div>

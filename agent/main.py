@@ -43,7 +43,7 @@ if not STORAGE_BUCKET:
     print("Warning: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET not found in environment variables.")
 
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
-IDLE_TIMEOUT = 300  # 5 minutes
+IDLE_TIMEOUT = 30
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
 
 # Initialize Firebase
@@ -343,6 +343,33 @@ class Agent:
         self.active_commands = {} # cmd_id -> CommandExecutor
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
+        
+        # Default configuration (can be updated from Firestore)
+        self.polling_rate = 10 # Active heartbeat interval
+        self.sleep_polling_rate = 60 # Sleep heartbeat interval
+        self.idle_timeout = IDLE_TIMEOUT
+
+        # Listen for configuration changes
+        self.doc_ref.on_snapshot(self.on_device_update)
+
+    def on_device_update(self, doc_snapshot, changes, read_time):
+        if len(doc_snapshot) == 1: # Single doc snapshot is a list in python SDK? No, just checking
+           # Wait, on_snapshot for document returns a list of size 1 usually if used on query, 
+           # but for document ref it returns the snapshot directly in some SDKs, or list of changes.
+           # In python admin SDK on_snapshot takes callback(col_snapshot, changes, read_time).
+           pass
+
+        # For document listen:
+        for change in changes:
+             if change.type.name == 'MODIFIED':
+                 data = change.document.to_dict()
+                 if data:
+                     # Update config
+                     if 'polling_rate' in data:
+                         self.polling_rate = data['polling_rate']
+                     if 'sleep_polling_rate' in data:
+                         self.sleep_polling_rate = data['sleep_polling_rate']
+                     print(f"Config updated: Active={self.polling_rate}s, Sleep={self.sleep_polling_rate}s")
 
     def get_git_info(self):
         """Collect git status information."""
@@ -380,7 +407,10 @@ class Agent:
                 'status': 'online',
                 'ip': self.get_ip_address(),
                 'stats': self.collect_stats(),
-                'git': self.get_git_info()
+                'git': self.get_git_info(),
+                # Set default config if missing
+                'polling_rate': 10,
+                'sleep_polling_rate': 60
             }, merge=True)
             print(f"Device {self.device_id} registered.")
         except Exception as e:
@@ -466,12 +496,12 @@ class Agent:
             idle_time = current_time - self.last_activity_time
             
             if self.watch: # Active Mode
-                if idle_time > IDLE_TIMEOUT and not is_busy:
-                    print(f"No activity for {IDLE_TIMEOUT}s. Entering sleep mode...")
+                if idle_time > self.idle_timeout and not is_busy:
+                    print(f"No activity for {self.idle_timeout}s. Entering sleep mode...")
                     self.stop_watching()
                 else:
                     self.send_heartbeat()
-                    time.sleep(10)
+                    time.sleep(self.polling_rate)
             else: # Sleep Mode
                 if self.has_pending_commands():
                     print("Activity detected via poll. Waking up...")
@@ -479,7 +509,7 @@ class Agent:
                     self.start_watching()
                 else:
                     self.send_heartbeat()
-                    time.sleep(60)
+                    time.sleep(self.sleep_polling_rate)
         
         # Cleanup
         self.file_syncer.stop()
