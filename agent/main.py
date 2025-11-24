@@ -18,7 +18,7 @@ load_dotenv()
 # TODO: Load from config file or env vars
 PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
-IDLE_TIMEOUT = 300  # 5 minutes
+IDLE_TIMEOUT = 30  # 5 minutes
 
 # Initialize Firebase
 # Note: For production, we'll need a way to authenticate. 
