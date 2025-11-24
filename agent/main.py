@@ -195,12 +195,20 @@ class CommandExecutor(threading.Thread):
                 raise ValueError("No command string provided")
 
             # Start process
+            # Force python output to be unbuffered using -u if the command is python
+            # But the user might run 'python script.py' or just 'script.py'.
+            # A generic way to unbuffer stdout in python subprocess is setting env var PYTHONUNBUFFERED=1
+            
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+
             self.process = subprocess.Popen(
                 command_str,
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
                 cwd=os.path.dirname(os.path.abspath(__file__)) # Set CWD to agent dir so 'shared/script.py' works
             )
             
@@ -274,13 +282,22 @@ class CommandExecutor(threading.Thread):
         if force or (current_time - self.last_flush > 1.0):
             updates = {}
             
-            # Let's keep a running total in memory for simplicity (assuming log isn't massive)
-            
+            # Use current buffer length to determine what's new (though we just concat everything)
+            # To properly stream chunks for VERY long outputs without exceeding Firestore document limit,
+            # one would need to use subcollections or separate docs.
+            # But for "streaming" updates to the same doc, we just update the field.
+            # If the output gets massive (>1MB), Firestore will error.
+            # For now, we assume reasonable output size.
+
             full_out = "".join(self.output_buffer)
             full_err = "".join(self.error_buffer)
             
+            # Check if there is anything new to update compared to last flush?
+            # Actually, we always overwrite 'output' field with full content so far.
+            # If we want to reduce writes, we could check if buffers changed length.
+            # But here we just check if we have content.
+            
             if full_out or full_err:
-                # We only update if there is something
                 updates['output'] = full_out
                 updates['error'] = full_err
                 
@@ -289,6 +306,13 @@ class CommandExecutor(threading.Thread):
                     self.last_flush = current_time
                 except Exception as e:
                     print(f"[{self.cmd_id}] Error flushing: {e}")
+                    # If document is too big, maybe we should truncate?
+                    if "Resource exhausted" in str(e) or "Document too large" in str(e):
+                        self.cmd_ref.update({
+                            'error': full_err + "\n[Output truncated due to size limit]",
+                            'status': 'completed' # Stop to prevent infinite loop of errors
+                        })
+                        self.should_stop = True
 
     def on_doc_update(self, col_snapshot, changes, read_time):
         try:

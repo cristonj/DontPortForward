@@ -13,6 +13,7 @@ import {
 
 interface SharedFolderProps {
   deviceId: string;
+  onRunCommand?: (command: string) => void;
 }
 
 interface FileItem {
@@ -21,7 +22,7 @@ interface FileItem {
   ref: StorageReference;
 }
 
-export default function SharedFolder({ deviceId }: SharedFolderProps) {
+export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -97,6 +98,39 @@ export default function SharedFolder({ deviceId }: SharedFolderProps) {
     }
   };
 
+  const handleEditFile = async (fileItem: FileItem) => {
+    // Only allow editing text files for now to avoid issues with large binaries
+    const MAX_SIZE = 1024 * 1024; // 1MB limit
+    try {
+        const url = await getDownloadURL(fileItem.ref);
+        const response = await fetch(url);
+        
+        // Check size roughly
+        // Cloud storage CORS might block content-length, or it might be null
+        const sizeHeader = response.headers.get("content-length");
+        const size = sizeHeader ? Number(sizeHeader) : 0;
+        
+        if (size > MAX_SIZE) {
+            alert("File is too large to edit in the browser.");
+            return;
+        }
+
+        const text = await response.text();
+        // Double check length of text content
+        if (text.length > MAX_SIZE) {
+            alert("File is too large to edit in the browser.");
+            return;
+        }
+
+        setNewFileName(fileItem.name);
+        setNewFileContent(text);
+        setIsCreatingFile(true);
+    } catch (error) {
+        console.error("Error fetching file content:", error);
+        alert("Failed to load file for editing.");
+    }
+  };
+
   const handleDownload = async (fileItem: FileItem) => {
     try {
       const url = await getDownloadURL(fileItem.ref);
@@ -113,6 +147,14 @@ export default function SharedFolder({ deviceId }: SharedFolderProps) {
       await fetchFiles();
     } catch (error) {
       console.error("Error deleting file:", error);
+    }
+  };
+
+  const handleRunFile = (fileItem: FileItem) => {
+    if (!onRunCommand) return;
+    const command = `python shared/${fileItem.name}`;
+    if (confirm(`Run ${fileItem.name} on device?`)) {
+        onRunCommand(command);
     }
   };
 
@@ -159,7 +201,7 @@ export default function SharedFolder({ deviceId }: SharedFolderProps) {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-2xl flex flex-col max-h-[90vh] shadow-2xl">
                 <div className="flex items-center justify-between p-4 border-b border-gray-800">
-                    <h3 className="text-lg font-bold text-white">Create New File</h3>
+                    <h3 className="text-lg font-bold text-white">{newFileName ? 'Edit File' : 'Create New File'}</h3>
                     <button onClick={() => setIsCreatingFile(false)} className="text-gray-400 hover:text-white">
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
@@ -235,6 +277,22 @@ export default function SharedFolder({ deviceId }: SharedFolderProps) {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-2">
+                        {file.name.endsWith('.py') && onRunCommand && (
+                            <button
+                                onClick={() => handleRunFile(file)}
+                                className="text-green-400 hover:text-green-300 px-2 py-1 hover:bg-green-900/20 rounded text-xs flex items-center gap-1"
+                                title="Run Python Script"
+                            >
+                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
+                                Run
+                            </button>
+                        )}
+                        <button
+                        onClick={() => handleEditFile(file)}
+                        className="text-yellow-400 hover:text-yellow-300 px-2 py-1 hover:bg-yellow-900/20 rounded text-xs"
+                        >
+                        Edit
+                        </button>
                         <button
                         onClick={() => handleDownload(file)}
                         className="text-blue-400 hover:text-blue-300 px-2 py-1 hover:bg-blue-900/20 rounded text-xs"

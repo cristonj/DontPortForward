@@ -58,6 +58,9 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  
+  // Expanded history logs state
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
 
   // Load selected device ID from local storage on mount
   useEffect(() => {
@@ -132,20 +135,27 @@ export default function Home() {
       }
   };
 
-  const sendCommand = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputCommand.trim() || !selectedDeviceId) return;
+  const sendCommand = async (e?: React.FormEvent, cmdString?: string) => {
+    if (e) e.preventDefault();
+    const cmdToRun = cmdString || inputCommand;
+    
+    if (!cmdToRun.trim() || !selectedDeviceId) return;
 
     try {
       const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
       await addDoc(commandsRef, {
-        command: inputCommand,
+        command: cmdToRun,
         type: 'shell', // Default to shell
         status: 'pending',
         created_at: serverTimestamp()
       });
-      setInputCommand("");
-      setShowSuggestions(false);
+      if (!cmdString) {
+          setInputCommand("");
+          setShowSuggestions(false);
+      } else {
+          // Switch to console view to see output
+          setViewMode('console');
+      }
     } catch (error) {
       console.error("Error sending command:", error);
     }
@@ -194,6 +204,18 @@ export default function Home() {
     } catch (error) {
       console.error("Error clearing history:", error);
     }
+  };
+
+  const toggleLogExpansion = (logId: string) => {
+    setExpandedLogs(prev => {
+        const next = new Set(prev);
+        if (next.has(logId)) {
+            next.delete(logId);
+        } else {
+            next.add(logId);
+        }
+        return next;
+    });
   };
 
   // Split logs into running and recent history
@@ -384,28 +406,65 @@ export default function Home() {
                                 </button>
                             </div>
                             <div className="space-y-2">
-                                {historyLogs.map(log => (
-                                    <div key={log.id} className="bg-gray-900/20 border border-gray-800 rounded-lg p-3 hover:bg-gray-900/40 transition-colors">
-                                        <div className="flex items-center gap-3">
-                                            <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                {historyLogs.map(log => {
+                                    const isExpanded = expandedLogs.has(log.id);
+                                    return (
+                                    <div 
+                                        key={log.id} 
+                                        className={`bg-gray-900/20 border border-gray-800 rounded-lg p-3 transition-colors cursor-pointer ${isExpanded ? 'bg-gray-900/60' : 'hover:bg-gray-900/40'}`}
+                                        onClick={() => toggleLogExpansion(log.id)}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <div className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${
                                                 log.status === 'completed' ? 'bg-green-500/50' : 'bg-red-500/50'
                                             }`} />
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="font-mono text-sm text-gray-300 truncate">{log.command}</span>
-                                                    <span className="text-[10px] text-gray-600 uppercase tracking-wider ml-2 shrink-0">{log.status}</span>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-mono text-sm text-gray-300 break-all">{log.command}</span>
+                                                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                sendCommand(undefined, log.command);
+                                                            }}
+                                                            className="text-gray-500 hover:text-white p-1 rounded hover:bg-gray-800 transition-colors"
+                                                            title="Rerun"
+                                                        >
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                                        </button>
+                                                        <span className="text-[10px] text-gray-600 uppercase tracking-wider">{log.status}</span>
+                                                        <svg 
+                                                            className={`w-4 h-4 text-gray-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
+                                                            fill="none" 
+                                                            stroke="currentColor" 
+                                                            viewBox="0 0 24 24"
+                                                        >
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                                        </svg>
+                                                    </div>
                                                 </div>
-                                                {/* Collapsed output preview */}
+                                                {/* Output preview or full view */}
                                                 {(log.output || log.error) && (
-                                                    <div className="mt-2 text-xs text-gray-500 font-mono line-clamp-2 pl-2 border-l-2 border-gray-800">
-                                                        {log.output && log.output.substring(0, 150)}
-                                                        {log.error && <span className="text-red-500/70">{log.error.substring(0, 150)}</span>}
+                                                    <div className={`mt-2 font-mono text-gray-500 ${
+                                                        isExpanded 
+                                                        ? 'text-xs whitespace-pre-wrap break-all bg-black/30 p-2 rounded border border-gray-800/50' 
+                                                        : 'text-xs line-clamp-2 pl-2 border-l-2 border-gray-800'
+                                                    }`}>
+                                                        {log.output && (
+                                                            <span>{isExpanded ? log.output : log.output.substring(0, 150)}</span>
+                                                        )}
+                                                        {log.error && (
+                                                            <span className="text-red-500/70 block mt-1">
+                                                                {isExpanded ? log.error : log.error.substring(0, 150)}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
                                         </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                     )}
@@ -461,7 +520,10 @@ export default function Home() {
                 </div>
               </>
           ) : viewMode === 'files' ? (
-              <SharedFolder deviceId={selectedDeviceId} />
+              <SharedFolder 
+                deviceId={selectedDeviceId} 
+                onRunCommand={(cmd) => sendCommand(undefined, cmd)}
+              />
           ) : (
               <DeviceStatus deviceId={selectedDeviceId} />
           )}
