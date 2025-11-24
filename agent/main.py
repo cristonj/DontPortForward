@@ -8,6 +8,7 @@ import platform
 import os
 import json
 import sys
+import psutil
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -53,11 +54,24 @@ class Agent:
                 'version': platform.version(),
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'status': 'online',
-                'ip': self.get_ip_address() # simplified
+                'ip': self.get_ip_address(), # simplified
+                'stats': self.collect_stats()
             }, merge=True)
             print(f"Device {self.device_id} registered.")
         except Exception as e:
             print(f"Error registering device: {e}")
+
+    def collect_stats(self):
+        try:
+            return {
+                'cpu_percent': psutil.cpu_percent(interval=None),
+                'memory_percent': psutil.virtual_memory().percent,
+                'disk_percent': psutil.disk_usage('/').percent,
+                'boot_time': psutil.boot_time()
+            }
+        except Exception as e:
+            print(f"Error collecting stats: {e}")
+            return {}
 
     def get_ip_address(self):
         # Placeholder for getting local IP
@@ -78,9 +92,13 @@ class Agent:
         commands_watch = commands_ref.on_snapshot(self.on_command_snapshot)
         
         while self.running:
-            # Heartbeat
-            self.doc_ref.update({'last_seen': firestore.SERVER_TIMESTAMP})
-            time.sleep(60)
+            # Heartbeat and Stats
+            stats = self.collect_stats()
+            self.doc_ref.update({
+                'last_seen': firestore.SERVER_TIMESTAMP,
+                'stats': stats
+            })
+            time.sleep(10) # Update stats every 10 seconds
 
     def on_command_snapshot(self, col_snapshot, changes, read_time):
         for change in changes:
@@ -92,10 +110,9 @@ class Agent:
 
     def process_command(self, cmd_id, cmd_data):
         command_str = cmd_data.get('command')
-        if not command_str:
-            return
-
-        print(f"Executing: {command_str}")
+        command_type = cmd_data.get('type', 'shell')
+        
+        print(f"Executing: {command_str} (Type: {command_type})")
         
         # Mark as processing
         self.doc_ref.collection('commands').document(cmd_id).update({
@@ -103,20 +120,34 @@ class Agent:
             'started_at': firestore.SERVER_TIMESTAMP
         })
 
+        output = ""
+        error = ""
+        return_code = 0
+        should_restart = False
+
         try:
-            # Execute command
-            # TODO: Implement security checks/whitelisting here!
-            result = subprocess.run(
-                command_str, 
-                shell=True, 
-                capture_output=True, 
-                text=True,
-                timeout=30 # Default timeout
-            )
-            
-            output = result.stdout
-            error = result.stderr
-            return_code = result.returncode
+            if command_type == 'restart':
+                output = "Agent restarting..."
+                should_restart = True
+            elif command_type == 'shell':
+                if not command_str:
+                    raise ValueError("No command string provided for shell execution")
+                # Execute command
+                # TODO: Implement security checks/whitelisting here!
+                result = subprocess.run(
+                    command_str, 
+                    shell=True, 
+                    capture_output=True, 
+                    text=True,
+                    timeout=30 # Default timeout
+                )
+                
+                output = result.stdout
+                error = result.stderr
+                return_code = result.returncode
+            else:
+                error = f"Unknown command type: {command_type}"
+                return_code = 1
 
         except subprocess.TimeoutExpired:
             output = ""
@@ -135,6 +166,10 @@ class Agent:
             'return_code': return_code,
             'completed_at': firestore.SERVER_TIMESTAMP
         })
+
+        if should_restart:
+            print("Restarting agent as requested...")
+            sys.exit(0)
 
 if __name__ == "__main__":
     print("Starting DontPortForward Agent...")
