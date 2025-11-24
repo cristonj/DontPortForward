@@ -12,6 +12,7 @@ import {
   limit
 } from "firebase/firestore";
 import DeviceList from "./components/DeviceList";
+import DeviceStatus from "./components/DeviceStatus";
 
 interface CommandLog {
   id: string;
@@ -45,6 +46,7 @@ export default function Home() {
   const [inputCommand, setInputCommand] = useState("");
   const [logs, setLogs] = useState<CommandLog[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const [viewMode, setViewMode] = useState<'console' | 'status'>('console');
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -207,6 +209,28 @@ export default function Home() {
                 <h1 className="font-bold text-lg sm:hidden">DPF Console</h1>
             </div>
 
+            {/* View Mode Switcher */}
+            {selectedDeviceId && (
+                <div className="flex bg-gray-800 rounded p-1 gap-1">
+                    <button 
+                        onClick={() => setViewMode('console')} 
+                        className={`px-3 py-1 rounded text-sm transition-colors ${
+                            viewMode === 'console' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+                        }`}
+                    >
+                        Console
+                    </button>
+                    <button 
+                        onClick={() => setViewMode('status')} 
+                        className={`px-3 py-1 rounded text-sm transition-colors ${
+                            viewMode === 'status' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+                        }`}
+                    >
+                        Status
+                    </button>
+                </div>
+            )}
+
             <div className="flex items-center gap-4">
                 <div className="text-sm text-gray-400 truncate max-w-[150px] sm:max-w-none">
                     {selectedDeviceId ? <span className="hidden sm:inline">Target: {selectedDeviceId}</span> : "No Device"}
@@ -224,87 +248,94 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Terminal Output */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-800">
-            {!selectedDeviceId && (
-                 <div className="text-gray-500 italic text-center mt-10">
-                 Select a device to start.
-               </div>
-            )}
-            
-            {selectedDeviceId && logs.length === 0 && (
-              <div className="text-gray-500 italic text-center mt-10">
-                No history. Send a command to start.
-              </div>
-            )}
-            
-            {logs.map((log) => (
-              <div key={log.id} className="space-y-1 group break-words">
-                <div className="flex items-center gap-2 text-blue-400 flex-wrap">
-                  <span className="text-gray-500 opacity-50 shrink-0">$</span>
-                  <span className="break-all">{log.command}</span>
-                  {log.status === 'pending' && <span className="text-xs text-yellow-500 animate-pulse shrink-0">[pending]</span>}
-                  {log.status === 'processing' && <span className="text-xs text-blue-500 animate-pulse shrink-0">[running...]</span>}
-                </div>
-                
-                {log.output && (
-                  <pre className="text-gray-300 whitespace-pre-wrap pl-4 border-l-2 border-gray-800 text-sm overflow-x-auto max-w-full">
-                    {log.output}
-                  </pre>
-                )}
-                
-                {log.error && (
-                  <pre className="text-red-400 whitespace-pre-wrap pl-4 border-l-2 border-red-900/50 text-sm overflow-x-auto max-w-full">
-                    {log.error}
-                  </pre>
-                )}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
-
-          {/* Input Area */}
-          <div className="bg-gray-900 p-4 border-t border-gray-800 shrink-0 relative">
-            
-            {/* Suggestions Popup */}
-            {showSuggestions && (
-                <div className="absolute bottom-full left-4 mb-2 bg-gray-800 border border-gray-700 rounded shadow-lg overflow-hidden w-64 max-h-48 overflow-y-auto z-10">
-                    {suggestions.map((suggestion, index) => (
-                        <div 
-                            key={suggestion}
-                            className={`px-4 py-2 cursor-pointer text-sm hover:bg-gray-700 ${index === suggestionIndex ? 'bg-gray-700 text-white' : 'text-gray-300'}`}
-                            onClick={() => {
-                                setInputCommand(suggestion);
-                                setShowSuggestions(false);
-                            }}
-                        >
-                            {suggestion}
+          {/* Main Content Area */}
+          {viewMode === 'console' ? (
+              <>
+                {/* Terminal Output */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-800">
+                    {!selectedDeviceId && (
+                        <div className="text-gray-500 italic text-center mt-10">
+                        Select a device to start.
+                    </div>
+                    )}
+                    
+                    {selectedDeviceId && logs.length === 0 && (
+                    <div className="text-gray-500 italic text-center mt-10">
+                        No history. Send a command to start.
+                    </div>
+                    )}
+                    
+                    {logs.map((log) => (
+                    <div key={log.id} className="space-y-1 group break-words">
+                        <div className="flex items-center gap-2 text-blue-400 flex-wrap">
+                        <span className="text-gray-500 opacity-50 shrink-0">$</span>
+                        <span className="break-all">{log.command}</span>
+                        {log.status === 'pending' && <span className="text-xs text-yellow-500 animate-pulse shrink-0">[pending]</span>}
+                        {log.status === 'processing' && <span className="text-xs text-blue-500 animate-pulse shrink-0">[running...]</span>}
                         </div>
+                        
+                        {log.output && (
+                        <pre className="text-gray-300 whitespace-pre-wrap pl-4 border-l-2 border-gray-800 text-sm overflow-x-auto max-w-full">
+                            {log.output}
+                        </pre>
+                        )}
+                        
+                        {log.error && (
+                        <pre className="text-red-400 whitespace-pre-wrap pl-4 border-l-2 border-red-900/50 text-sm overflow-x-auto max-w-full">
+                            {log.error}
+                        </pre>
+                        )}
+                    </div>
                     ))}
+                    <div ref={logsEndRef} />
                 </div>
-            )}
 
-            <form onSubmit={sendCommand} className="flex gap-2">
-              <span className="text-green-500 py-2 font-bold">{'>'}</span>
-              <input
-                type="text"
-                value={inputCommand}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 font-mono disabled:opacity-50 min-w-0"
-                placeholder="Enter command..."
-                autoFocus
-                disabled={!selectedDeviceId}
-              />
-              <button 
-                type="submit"
-                disabled={!inputCommand.trim() || !selectedDeviceId}
-                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded text-sm font-semibold transition-colors whitespace-nowrap"
-              >
-                Send
-              </button>
-            </form>
-          </div>
+                {/* Input Area */}
+                <div className="bg-gray-900 p-4 border-t border-gray-800 shrink-0 relative">
+                    
+                    {/* Suggestions Popup */}
+                    {showSuggestions && (
+                        <div className="absolute bottom-full left-4 mb-2 bg-gray-800 border border-gray-700 rounded shadow-lg overflow-hidden w-64 max-h-48 overflow-y-auto z-10">
+                            {suggestions.map((suggestion, index) => (
+                                <div 
+                                    key={suggestion}
+                                    className={`px-4 py-2 cursor-pointer text-sm hover:bg-gray-700 ${index === suggestionIndex ? 'bg-gray-700 text-white' : 'text-gray-300'}`}
+                                    onClick={() => {
+                                        setInputCommand(suggestion);
+                                        setShowSuggestions(false);
+                                    }}
+                                >
+                                    {suggestion}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <form onSubmit={sendCommand} className="flex gap-2">
+                    <span className="text-green-500 py-2 font-bold">{'>'}</span>
+                    <input
+                        type="text"
+                        value={inputCommand}
+                        onChange={handleInputChange}
+                        onKeyDown={handleKeyDown}
+                        className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 font-mono disabled:opacity-50 min-w-0"
+                        placeholder="Enter command..."
+                        autoFocus
+                        disabled={!selectedDeviceId}
+                    />
+                    <button 
+                        type="submit"
+                        disabled={!inputCommand.trim() || !selectedDeviceId}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded text-sm font-semibold transition-colors whitespace-nowrap"
+                    >
+                        Send
+                    </button>
+                    </form>
+                </div>
+              </>
+          ) : (
+              <DeviceStatus deviceId={selectedDeviceId} />
+          )}
       </div>
     </main>
   );
