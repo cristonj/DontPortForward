@@ -47,7 +47,6 @@ export default function Home() {
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [inputCommand, setInputCommand] = useState("");
   const [logs, setLogs] = useState<CommandLog[]>([]);
-  const logsEndRef = useRef<HTMLDivElement>(null);
   const [viewMode, setViewMode] = useState<'console' | 'status'>('console');
   
   // Mobile sidebar state
@@ -78,7 +77,8 @@ export default function Home() {
     }
 
     const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-    const q = query(commandsRef, orderBy("created_at", "asc"), limit(50));
+    // Change to descending to get the most recent commands first
+    const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
@@ -92,11 +92,6 @@ export default function Home() {
 
     return () => unsubscribe();
   }, [selectedDeviceId]);
-
-  // Scroll to bottom on new logs
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
 
   // Handle Input Change & Autocomplete
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -182,6 +177,10 @@ export default function Home() {
         console.error("Error killing command:", error);
     }
   };
+
+  // Split logs into running and recent history
+  const runningLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
+  const historyLogs = logs.filter(log => !['pending', 'processing'].includes(log.status));
 
   return (
     <main className="flex h-[100dvh] bg-black text-gray-200 font-mono overflow-hidden relative selection:bg-gray-800">
@@ -282,7 +281,7 @@ export default function Home() {
           {viewMode === 'console' ? (
               <>
                 {/* Terminal Output */}
-                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm">
+                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm">
                     {!selectedDeviceId && (
                         <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
                             <div className="w-12 h-12 border-2 border-gray-700 rounded-lg flex items-center justify-center">
@@ -298,51 +297,82 @@ export default function Home() {
                         </div>
                     )}
                     
-                    {logs.map((log) => (
-                    <div key={log.id} className="group break-words">
-                        <div className="flex items-start gap-2 text-blue-400">
-                            <span className="text-gray-600 select-none mt-0.5">$</span>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="font-bold text-gray-300">{log.command}</span>
-                                    {log.status === 'pending' && <span className="text-[10px] uppercase tracking-wider text-yellow-500/80 animate-pulse">Pending</span>}
-                                    {log.status === 'processing' && (
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] uppercase tracking-wider text-blue-500/80 animate-pulse">Running</span>
+                    {/* Running Processes Section */}
+                    {selectedDeviceId && runningLogs.length > 0 && (
+                        <div className="space-y-3">
+                            <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold mb-2 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                Active Processes ({runningLogs.length})
+                            </h3>
+                            <div className="grid grid-cols-1 gap-3">
+                                {runningLogs.map(log => (
+                                    <div key={log.id} className="bg-gray-900/40 border border-blue-500/30 rounded-lg p-4 shadow-lg backdrop-blur-sm relative group overflow-hidden">
+                                        <div className="flex justify-between items-start mb-2 relative z-10">
+                                            <div className="flex flex-col">
+                                                <div className="font-bold text-white text-base">{log.command}</div>
+                                                <div className="text-xs text-blue-300/70 mt-0.5 font-mono">
+                                                    ID: {log.id.substring(0, 8)} • {log.status}
+                                                </div>
+                                            </div>
                                             <button 
                                                 onClick={() => killCommand(log.id)}
-                                                className="opacity-100 sm:opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/30 text-red-400 rounded transition-all"
-                                                title="Stop execution"
+                                                className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/20 transition-colors flex items-center gap-1"
                                             >
-                                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/></svg>
+                                                <span className="w-2 h-2 bg-red-500 rounded-sm"></span>
+                                                Stop
                                             </button>
                                         </div>
-                                    )}
-                                    {log.status === 'cancelled' && <span className="text-[10px] uppercase tracking-wider text-red-500/80">Cancelled</span>}
-                                </div>
+                                        
+                                        {/* Output Preview for Active Process */}
+                                        <div className="bg-black/50 rounded p-2 font-mono text-xs text-gray-300 h-32 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 border border-gray-800/50">
+                                            {(log.output || log.error) ? (
+                                                <pre className="whitespace-pre-wrap break-all">
+                                                    {log.output}
+                                                    {log.error && <span className="text-red-400">{log.error}</span>}
+                                                </pre>
+                                            ) : (
+                                                <span className="text-gray-600 italic">Waiting for output...</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                        
-                        {(log.output || log.error) && (
-                            <div className="mt-1 ml-4 relative">
-                                <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gray-800"></div>
-                                <div className="pl-3 overflow-x-auto">
-                                    {log.output && (
-                                        <pre className="text-gray-400 whitespace-pre-wrap font-mono text-xs sm:text-sm leading-relaxed">
-                                            {log.output}
-                                        </pre>
-                                    )}
-                                    {log.error && (
-                                        <pre className="text-red-400/90 whitespace-pre-wrap font-mono text-xs sm:text-sm leading-relaxed">
-                                            {log.error}
-                                        </pre>
-                                    )}
-                                </div>
+                    )}
+
+                    {/* Recent History Section */}
+                    {selectedDeviceId && historyLogs.length > 0 && (
+                        <div className="space-y-3 pt-4">
+                            <h3 className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2">
+                                Recent History
+                            </h3>
+                            <div className="space-y-2">
+                                {historyLogs.map(log => (
+                                    <div key={log.id} className="bg-gray-900/20 border border-gray-800 rounded-lg p-3 hover:bg-gray-900/40 transition-colors">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                                log.status === 'completed' ? 'bg-green-500/50' : 'bg-red-500/50'
+                                            }`} />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="font-mono text-sm text-gray-300 truncate">{log.command}</span>
+                                                    <span className="text-[10px] text-gray-600 uppercase tracking-wider ml-2 shrink-0">{log.status}</span>
+                                                </div>
+                                                {/* Collapsed output preview */}
+                                                {(log.output || log.error) && (
+                                                    <div className="mt-2 text-xs text-gray-500 font-mono line-clamp-2 pl-2 border-l-2 border-gray-800">
+                                                        {log.output && log.output.substring(0, 150)}
+                                                        {log.error && <span className="text-red-500/70">{log.error.substring(0, 150)}</span>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                        )}
-                    </div>
-                    ))}
-                    <div ref={logsEndRef} className="h-4" />
+                        </div>
+                    )}
+
                 </div>
 
                 {/* Input Area */}
