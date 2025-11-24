@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import DeviceList from "./components/DeviceList";
 import DeviceStatus from "./components/DeviceStatus";
+import SharedFolder from "./components/SharedFolder";
 
 interface CommandLog {
   id: string;
@@ -47,7 +48,7 @@ export default function Home() {
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [inputCommand, setInputCommand] = useState("");
   const [logs, setLogs] = useState<CommandLog[]>([]);
-  const [viewMode, setViewMode] = useState<'console' | 'status'>('console');
+  const [viewMode, setViewMode] = useState<'console' | 'status' | 'files'>('console');
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -252,6 +253,16 @@ export default function Home() {
                                 Term
                             </button>
                             <button 
+                                onClick={() => setViewMode('files')} 
+                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                                    viewMode === 'files' 
+                                    ? 'bg-gray-700 text-white shadow-sm' 
+                                    : 'text-gray-400 hover:text-gray-300'
+                                }`}
+                            >
+                                Files
+                            </button>
+                            <button 
                                 onClick={() => setViewMode('status')} 
                                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                                     viewMode === 'status' 
@@ -423,6 +434,8 @@ export default function Home() {
                     </form>
                 </div>
               </>
+          ) : viewMode === 'files' ? (
+              <SharedFolder deviceId={selectedDeviceId} />
           ) : (
               <DeviceStatus deviceId={selectedDeviceId} />
           )}
