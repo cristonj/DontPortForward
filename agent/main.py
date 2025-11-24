@@ -47,6 +47,32 @@ class Agent:
         self.watch = None
         self.last_activity_time = time.time()
 
+    def get_git_info(self):
+        """Collect git status information."""
+        try:
+            repo_path = os.path.dirname(os.path.abspath(__file__))
+            
+            def run_git(args):
+                return subprocess.check_output(['git'] + args, cwd=repo_path, text=True, stderr=subprocess.DEVNULL).strip()
+            
+            # Check if it's a git repo
+            subprocess.check_call(['git', 'rev-parse', '--is-inside-work-tree'], cwd=repo_path, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+            branch = run_git(['rev-parse', '--abbrev-ref', 'HEAD'])
+            commit = run_git(['rev-parse', '--short', 'HEAD'])
+            status = run_git(['status', '--porcelain'])
+            is_dirty = bool(status)
+            last_commit_date = run_git(['log', '-1', '--format=%cd', '--date=iso'])
+            
+            return {
+                'branch': branch,
+                'commit': commit,
+                'is_dirty': is_dirty,
+                'last_commit_date': last_commit_date
+            }
+        except Exception:
+            return None
+
     def register(self):
         """Register the device in Firestore."""
         try:
@@ -58,7 +84,8 @@ class Agent:
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'status': 'online',
                 'ip': self.get_ip_address(), # simplified
-                'stats': self.collect_stats()
+                'stats': self.collect_stats(),
+                'git': self.get_git_info()
             }, merge=True)
             print(f"Device {self.device_id} registered.")
         except Exception as e:
@@ -115,11 +142,16 @@ class Agent:
         """Send heartbeat and stats to Firestore."""
         try:
             stats = self.collect_stats()
-            self.doc_ref.update({
+            git_info = self.get_git_info()
+            update_data = {
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'stats': stats,
                 'mode': 'active' if self.watch else 'sleep'
-            })
+            }
+            if git_info:
+                update_data['git'] = git_info
+                
+            self.doc_ref.update(update_data)
         except Exception as e:
             print(f"Error sending heartbeat: {e}")
 
