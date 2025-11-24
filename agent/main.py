@@ -1,0 +1,144 @@
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+import threading
+import time
+import subprocess
+import platform
+import os
+import json
+import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configuration
+# TODO: Load from config file or env vars
+PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
+DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
+
+# Initialize Firebase
+# Note: For production, we'll need a way to authenticate. 
+# Either service account json or identity.
+try:
+    cred = credentials.ApplicationDefault()
+    if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        # Fallback to looking for serviceAccountKey.json
+        if os.path.exists("serviceAccountKey.json"):
+            cred = credentials.Certificate("serviceAccountKey.json")
+    
+    firebase_admin.initialize_app(cred, {
+        'projectId': PROJECT_ID,
+    })
+    db = firestore.client()
+except Exception as e:
+    print(f"Error initializing Firebase: {e}")
+    # We might want to exit or retry, but for now let's just print
+    pass
+
+class Agent:
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self.running = True
+        self.doc_ref = db.collection('devices').document(self.device_id)
+
+    def register(self):
+        """Register the device in Firestore."""
+        try:
+            self.doc_ref.set({
+                'hostname': platform.node(),
+                'platform': platform.system(),
+                'release': platform.release(),
+                'version': platform.version(),
+                'last_seen': firestore.SERVER_TIMESTAMP,
+                'status': 'online',
+                'ip': self.get_ip_address() # simplified
+            }, merge=True)
+            print(f"Device {self.device_id} registered.")
+        except Exception as e:
+            print(f"Error registering device: {e}")
+
+    def get_ip_address(self):
+        # Placeholder for getting local IP
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "127.0.0.1"
+
+    def listen_for_commands(self):
+        """Listen for new commands in the commands subcollection."""
+        # Using a snapshot listener
+        commands_ref = self.doc_ref.collection('commands').where('status', '==', 'pending')
+        commands_watch = commands_ref.on_snapshot(self.on_command_snapshot)
+        
+        while self.running:
+            # Heartbeat
+            self.doc_ref.update({'last_seen': firestore.SERVER_TIMESTAMP})
+            time.sleep(60)
+
+    def on_command_snapshot(self, col_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name == 'ADDED':
+                cmd_doc = change.document
+                cmd_data = cmd_doc.to_dict()
+                print(f"Received command: {cmd_data}")
+                self.process_command(cmd_doc.id, cmd_data)
+
+    def process_command(self, cmd_id, cmd_data):
+        command_str = cmd_data.get('command')
+        if not command_str:
+            return
+
+        print(f"Executing: {command_str}")
+        
+        # Mark as processing
+        self.doc_ref.collection('commands').document(cmd_id).update({
+            'status': 'processing',
+            'started_at': firestore.SERVER_TIMESTAMP
+        })
+
+        try:
+            # Execute command
+            # TODO: Implement security checks/whitelisting here!
+            result = subprocess.run(
+                command_str, 
+                shell=True, 
+                capture_output=True, 
+                text=True,
+                timeout=30 # Default timeout
+            )
+            
+            output = result.stdout
+            error = result.stderr
+            return_code = result.returncode
+
+        except subprocess.TimeoutExpired:
+            output = ""
+            error = "Command timed out"
+            return_code = -1
+        except Exception as e:
+            output = ""
+            error = str(e)
+            return_code = -1
+
+        # Update result
+        self.doc_ref.collection('commands').document(cmd_id).update({
+            'status': 'completed',
+            'output': output,
+            'error': error,
+            'return_code': return_code,
+            'completed_at': firestore.SERVER_TIMESTAMP
+        })
+
+if __name__ == "__main__":
+    print("Starting DontPortForward Agent...")
+    agent = Agent(DEVICE_ID)
+    agent.register()
+    agent.listen_for_commands()
+

@@ -1,0 +1,27 @@
+# General
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Node/JS (if we use a web frontend or electron)
+node_modules/
+npm-debug.log
+yarn-error.log
+.next/
+
+# Project specific
+config.json
+service_account.json
+
