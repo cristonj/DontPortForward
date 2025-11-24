@@ -11,12 +11,37 @@ import json
 import sys
 import psutil
 from dotenv import load_dotenv
+from pathlib import Path
+import warnings
 
-# Load environment variables from .env file
-load_dotenv()
+# Suppress google-crc32c warning (no C extension on Windows Python 3.14)
+warnings.filterwarnings("ignore", message="As the c extension couldn't be imported")
+
+# Load environment variables
+# Try to find .env.local or .env in the project root (parent of agent directory)
+root_dir = Path(__file__).resolve().parent.parent
+env_local = root_dir / '.env.local'
+env_file = root_dir / '.env'
+
+if env_local.exists():
+    print(f"Loading env from {env_local}")
+    load_dotenv(dotenv_path=env_local)
+elif env_file.exists():
+    print(f"Loading env from {env_file}")
+    load_dotenv(dotenv_path=env_file)
+else:
+    # Fallback to default behavior (current dir search)
+    load_dotenv()
 
 # Configuration
-PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
+PROJECT_ID = os.getenv("NEXT_PUBLIC_FIREBASE_PROJECT_ID")
+STORAGE_BUCKET = os.getenv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET")
+
+if not PROJECT_ID:
+    print("Warning: NEXT_PUBLIC_FIREBASE_PROJECT_ID not found in environment variables.")
+if not STORAGE_BUCKET:
+    print("Warning: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET not found in environment variables.")
+
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
 IDLE_TIMEOUT = 300  # 5 minutes
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
@@ -30,7 +55,7 @@ try:
     
     firebase_admin.initialize_app(cred, {
         'projectId': PROJECT_ID,
-        'storageBucket': os.getenv("FIREBASE_STORAGE_BUCKET") # Expect this env var or we need to hardcode if provided in web
+        'storageBucket': STORAGE_BUCKET
     })
     db = firestore.client()
 except Exception as e:
@@ -61,6 +86,7 @@ class FileSyncer(threading.Thread):
                     if not filename: continue # Skip directory marker if any
                     
                     local_file_path = os.path.join(self.local_path, filename)
+                    remote_mtime = blob.updated.timestamp()
                     
                     download = False
                     if not os.path.exists(local_file_path):
@@ -68,8 +94,6 @@ class FileSyncer(threading.Thread):
                         print(f"New file found: {filename}")
                     else:
                         # Check modification time
-                        # Cloud Storage uses updated time
-                        remote_mtime = blob.updated.timestamp()
                         local_mtime = os.path.getmtime(local_file_path)
                         # We allow some drift, or just strict newer
                         if remote_mtime > local_mtime:
@@ -363,7 +387,7 @@ class Agent:
     def start_watching(self):
         if not self.watch:
              print("Starting real-time listener...")
-             commands_ref = self.doc_ref.collection('commands').where('status', '==', 'pending')
+             commands_ref = self.doc_ref.collection('commands').where(field_path='status', op_string='==', value='pending')
              self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
 
     def stop_watching(self):
@@ -374,7 +398,7 @@ class Agent:
 
     def has_pending_commands(self):
         try:
-            docs = self.doc_ref.collection('commands').where('status', '==', 'pending').limit(1).get()
+            docs = self.doc_ref.collection('commands').where(field_path='status', op_string='==', value='pending').limit(1).get()
             return len(list(docs)) > 0
         except Exception as e:
             print(f"Error checking for pending commands: {e}")
