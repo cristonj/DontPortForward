@@ -51,7 +51,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
 
     const unsub = onSnapshot(doc(db, "devices", deviceId), (doc) => {
         if (doc.exists()) {
-            const data = doc.data() as Device;
+            const data = doc.data() as Omit<Device, 'id'>;
             setDevice({ id: doc.id, ...data });
             // Only update local state if not interacting or on first load
             if (localPollingRate === null && data.polling_rate) {
