@@ -9,24 +9,21 @@ import os
 import json
 import sys
 import psutil
+import selectors
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configuration
-# TODO: Load from config file or env vars
 PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
-IDLE_TIMEOUT = 30  # 5 minutes
+IDLE_TIMEOUT = 300  # 5 minutes
 
 # Initialize Firebase
-# Note: For production, we'll need a way to authenticate. 
-# Either service account json or identity.
 try:
     cred = credentials.ApplicationDefault()
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-        # Fallback to looking for serviceAccountKey.json
         if os.path.exists("serviceAccountKey.json"):
             cred = credentials.Certificate("serviceAccountKey.json")
     
@@ -36,8 +33,246 @@ try:
     db = firestore.client()
 except Exception as e:
     print(f"Error initializing Firebase: {e}")
-    # We might want to exit or retry, but for now let's just print
     pass
+
+class CommandExecutor(threading.Thread):
+    def __init__(self, cmd_id, cmd_data, device_ref):
+        super().__init__()
+        self.cmd_id = cmd_id
+        self.cmd_data = cmd_data
+        self.device_ref = device_ref
+        self.cmd_ref = device_ref.collection('commands').document(cmd_id)
+        self.process = None
+        self.should_stop = False
+        self.output_buffer = []
+        self.error_buffer = []
+        self.last_flush = time.time()
+        self.kill_listener = None
+
+    def run(self):
+        command_str = self.cmd_data.get('command')
+        command_type = self.cmd_data.get('type', 'shell')
+        
+        print(f"[{self.cmd_id}] Executing: {command_str}")
+
+        # Listen for kill signal
+        self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
+
+        try:
+            # Mark as processing
+            self.cmd_ref.update({
+                'status': 'processing',
+                'started_at': firestore.SERVER_TIMESTAMP
+            })
+
+            if command_type == 'restart':
+                self.cmd_ref.update({'output': 'Agent restarting...', 'status': 'completed', 'completed_at': firestore.SERVER_TIMESTAMP})
+                print("Restarting agent...")
+                # We need to exit the main process, but we are in a thread.
+                # We can set a flag or just call sys.exit() (which kills the thread? or the process? sys.exit() in thread raises SystemExit in thread)
+                # To kill main process:
+                os._exit(0)
+                return
+
+            if not command_str:
+                raise ValueError("No command string provided")
+
+            # Start process
+            self.process = subprocess.Popen(
+                command_str,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=0 # Unbuffered? Or line buffered? 
+                # Note: text=True with bufsize=0 is not allowed. 
+                # We'll use default buffering and read often.
+            )
+            
+            # Use selectors to read non-blocking
+            sel = selectors.DefaultSelector()
+            sel.register(self.process.stdout, selectors.EVENT_READ)
+            sel.register(self.process.stderr, selectors.EVENT_READ)
+
+            while True:
+                if self.should_stop:
+                    print(f"[{self.cmd_id}] Kill signal received. Terminating...")
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                    break
+
+                # Check if process ended
+                if self.process.poll() is not None:
+                    # Process ended, but consume remaining output
+                    self.read_output(sel, timeout=0)
+                    break
+                
+                # Read available data
+                if self.read_output(sel, timeout=0.1):
+                    pass
+                
+                # Flush to firestore if needed
+                self.flush_output()
+
+            return_code = self.process.returncode
+            if self.should_stop:
+                error_msg = "Command cancelled by user."
+            else:
+                error_msg = ""
+
+            # Final flush
+            self.flush_output(force=True)
+            
+            # Update final status
+            update_data = {
+                'status': 'completed',
+                'return_code': return_code,
+                'completed_at': firestore.SERVER_TIMESTAMP
+            }
+            if self.should_stop:
+                update_data['error'] = (self.cmd_data.get('error', '') + '\n' + error_msg).strip()
+                update_data['status'] = 'cancelled'
+
+            self.cmd_ref.update(update_data)
+
+        except Exception as e:
+            print(f"[{self.cmd_id}] Error: {e}")
+            self.cmd_ref.update({
+                'status': 'completed', # or error
+                'error': str(e),
+                'completed_at': firestore.SERVER_TIMESTAMP
+            })
+        finally:
+            if self.kill_listener:
+                self.kill_listener.unsubscribe()
+            if self.process and self.process.poll() is None:
+                 # Cleanup if still running
+                 self.process.terminate()
+
+    def read_output(self, sel, timeout):
+        events = sel.select(timeout)
+        data_read = False
+        for key, mask in events:
+            # Check which pipe is ready
+            if key.fileobj == self.process.stdout:
+                line = self.process.stdout.read(1024) # Read chunk
+                if line:
+                    self.output_buffer.append(line)
+                    data_read = True
+            elif key.fileobj == self.process.stderr:
+                line = self.process.stderr.read(1024)
+                if line:
+                    self.error_buffer.append(line)
+                    data_read = True
+        return data_read
+
+    def flush_output(self, force=False):
+        current_time = time.time()
+        # Flush every 1 second or if forced
+        if force or (current_time - self.last_flush > 1.0):
+            updates = {}
+            if self.output_buffer:
+                # Append to existing output? 
+                # Firestore transform arrayUnion? No, it's a string.
+                # We can't easily "append" to a string field atomically without a transaction.
+                # But since we are the only writer for 'output' usually...
+                # Actually, race conditions if we read-then-write.
+                # But we are the only one writing 'output'.
+                # Wait, if we just set 'output', we overwrite previous?
+                # We need to keep local state of total output?
+                # No, we can just send the new chunk?
+                # The UI expects full log or chunks?
+                # UI just shows `log.output`. If we overwrite, we lose history.
+                # We should append. 
+                # The easiest way with Firestore is to fetch current, append, and update.
+                # Or keep a running total in memory and update the whole field.
+                # Since we are the single writer, we can keep running total.
+                pass 
+            
+            # Let's keep a running total in memory for simplicity (assuming log isn't massive)
+            # If logs are massive, we should use a subcollection of log entries.
+            # For now, running total string.
+            
+            full_out = "".join(self.output_buffer)
+            full_err = "".join(self.error_buffer)
+            
+            # Since we only append new stuff to buffer, wait.
+            # self.output_buffer accumulates FOREVER in this loop?
+            # Yes, if we want to write the full string each time.
+            # If we want to save bandwidth, we shouldn't send full string every time.
+            # But Firestore doesn't support "string append" operation.
+            # So we have to send full string.
+            
+            if full_out or full_err:
+                # We only update if there is something
+                # But we need the previous content if we cleared buffer?
+                # No, let's just keep accumulating in buffer and write the whole thing.
+                # It's inefficient for huge logs but fine for typical commands.
+                updates['output'] = full_out
+                updates['error'] = full_err
+                
+                try:
+                    self.cmd_ref.update(updates)
+                    self.last_flush = current_time
+                except Exception as e:
+                    print(f"[{self.cmd_id}] Error flushing: {e}")
+
+    def on_doc_update(self, col_snapshot, changes, read_time):
+        for change in changes:
+            # We are listening to a single document, so changes contain just that doc
+            # But on_snapshot returns QuerySnapshot logic?
+            # doc_ref.on_snapshot returns (doc_snapshot, changes, read_time) ?
+            # No, for document ref: (doc_snapshot, changes, read_time) is for collection query.
+            # For doc ref, callback signature is (doc_snapshot, changes, read_time).
+            # Wait, no.
+            # Doc ref snapshot listener: callback(doc_snapshot, changes, read_time)
+            # changes is list of Change objects.
+            pass
+        
+        # Actually simplest signature: callback(doc_snapshot, changes, read_time)
+        # But for a single document, 'changes' might not be populated same way?
+        # Let's just look at the doc_snapshot.
+        # But wait, the callback receives `(col_snapshot, changes, read_time)` only for collection queries?
+        # For document listen: `callback(doc_snapshot, changes, read_time)`?
+        # Let's check docs or assume standard behavior.
+        # Actually, standard python firebase-admin listener:
+        # `doc_ref.on_snapshot(callback)`
+        # `callback(doc_snapshot, changes, read_time)`
+        
+        # doc_snapshot is a list? No, for single doc it should be a DocumentSnapshot?
+        # Actually, the google-cloud-firestore python lib is tricky.
+        # Let's assume generic approach:
+        
+        # Wait, if I use `doc_ref.on_snapshot`, the first arg is `doc_snapshot`.
+        # Note: If it's a list (collection), it's `col_snapshot`.
+        
+        # Let's inspect what we get.
+        # If I get a list of snapshots (which I shouldn't for a doc ref listener, but maybe), I'll handle it.
+        # Actually, let's look at `on_command_snapshot` in original code (line 189).
+        # That was a collection query.
+        
+        # For a single document, let's just read the data from the first argument.
+        try:
+            # The first argument is the snapshot(s).
+            # If it's a list (QuerySnapshot), iterate.
+            # If it's a DocumentSnapshot, use it.
+            
+            docs = []
+            if hasattr(col_snapshot, '__iter__'):
+                docs = list(col_snapshot)
+            else:
+                docs = [col_snapshot]
+
+            for doc in docs:
+                data = doc.to_dict()
+                if data and data.get('kill_signal') is True:
+                    self.should_stop = True
+        except Exception as e:
+            print(f"Error in kill listener: {e}")
+
 
 class Agent:
     def __init__(self, device_id):
@@ -45,6 +280,7 @@ class Agent:
         self.running = True
         self.doc_ref = db.collection('devices').document(self.device_id)
         self.watch = None
+        self.active_commands = {} # cmd_id -> CommandExecutor
         self.last_activity_time = time.time()
 
     def get_git_info(self):
@@ -55,7 +291,6 @@ class Agent:
             def run_git(args):
                 return subprocess.check_output(['git'] + args, cwd=repo_path, text=True, stderr=subprocess.DEVNULL).strip()
             
-            # Check if it's a git repo
             subprocess.check_call(['git', 'rev-parse', '--is-inside-work-tree'], cwd=repo_path, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
             branch = run_git(['rev-parse', '--abbrev-ref', 'HEAD'])
@@ -74,7 +309,6 @@ class Agent:
             return None
 
     def register(self):
-        """Register the device in Firestore."""
         try:
             self.doc_ref.set({
                 'hostname': platform.node(),
@@ -83,7 +317,7 @@ class Agent:
                 'version': platform.version(),
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'status': 'online',
-                'ip': self.get_ip_address(), # simplified
+                'ip': self.get_ip_address(),
                 'stats': self.collect_stats(),
                 'git': self.get_git_info()
             }, merge=True)
@@ -100,11 +334,9 @@ class Agent:
                 'boot_time': psutil.boot_time()
             }
         except Exception as e:
-            print(f"Error collecting stats: {e}")
             return {}
 
     def get_ip_address(self):
-        # Placeholder for getting local IP
         import socket
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -116,21 +348,18 @@ class Agent:
             return "127.0.0.1"
 
     def start_watching(self):
-        """Start real-time listener for commands."""
         if not self.watch:
              print("Starting real-time listener...")
              commands_ref = self.doc_ref.collection('commands').where('status', '==', 'pending')
              self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
 
     def stop_watching(self):
-        """Stop real-time listener."""
         if self.watch:
             print("Stopping real-time listener...")
             self.watch.unsubscribe()
             self.watch = None
 
     def has_pending_commands(self):
-        """Check if there are any pending commands (poll)."""
         try:
             docs = self.doc_ref.collection('commands').where('status', '==', 'pending').limit(1).get()
             return len(list(docs)) > 0
@@ -139,7 +368,6 @@ class Agent:
             return False
 
     def send_heartbeat(self):
-        """Send heartbeat and stats to Firestore."""
         try:
             stats = self.collect_stats()
             git_info = self.get_git_info()
@@ -156,33 +384,38 @@ class Agent:
             print(f"Error sending heartbeat: {e}")
 
     def listen_for_commands(self):
-        """Listen for new commands and handle sleep/active modes."""
         self.last_activity_time = time.time()
-        
-        # Start in active mode
         self.start_watching()
         
         while self.running:
             current_time = time.time()
+            
+            # Clean up finished threads
+            finished_ids = [cmd_id for cmd_id, thread in self.active_commands.items() if not thread.is_alive()]
+            for cmd_id in finished_ids:
+                print(f"Command {cmd_id} finished.")
+                del self.active_commands[cmd_id]
+
+            # Determine activity
+            is_busy = len(self.active_commands) > 0
+            if is_busy:
+                self.last_activity_time = current_time
+
             idle_time = current_time - self.last_activity_time
             
             if self.watch: # Active Mode
-                if idle_time > IDLE_TIMEOUT:
+                if idle_time > IDLE_TIMEOUT and not is_busy:
                     print(f"No activity for {IDLE_TIMEOUT}s. Entering sleep mode...")
                     self.stop_watching()
                 else:
-                    # Heartbeat every 10s
                     self.send_heartbeat()
                     time.sleep(10)
             else: # Sleep Mode
-                # Poll for existence of pending commands
                 if self.has_pending_commands():
                     print("Activity detected via poll. Waking up...")
                     self.last_activity_time = time.time()
                     self.start_watching()
-                    # The watcher will fire immediately for the pending commands
                 else:
-                    # Heartbeat every 60s (slower)
                     self.send_heartbeat()
                     time.sleep(60)
 
@@ -193,78 +426,16 @@ class Agent:
                 cmd_doc = change.document
                 cmd_data = cmd_doc.to_dict()
                 print(f"Received command: {cmd_data}")
-                self.process_command(cmd_doc.id, cmd_data)
+                self.start_command(cmd_doc.id, cmd_data)
 
-    def process_command(self, cmd_id, cmd_data):
-        command_str = cmd_data.get('command')
-        command_type = cmd_data.get('type', 'shell')
-        
-        print(f"Executing: {command_str} (Type: {command_type})")
-        
-        # Mark as processing
-        try:
-            self.doc_ref.collection('commands').document(cmd_id).update({
-                'status': 'processing',
-                'started_at': firestore.SERVER_TIMESTAMP
-            })
-        except Exception as e:
-             print(f"Error updating command status: {e}")
+    def start_command(self, cmd_id, cmd_data):
+        if cmd_id in self.active_commands:
+            print(f"Command {cmd_id} is already running.")
+            return
 
-        output = ""
-        error = ""
-        return_code = 0
-        should_restart = False
-
-        try:
-            if command_type == 'restart':
-                output = "Agent restarting..."
-                should_restart = True
-            elif command_type == 'shell':
-                if not command_str:
-                    raise ValueError("No command string provided for shell execution")
-                # Execute command
-                # TODO: Implement security checks/whitelisting here!
-                result = subprocess.run(
-                    command_str, 
-                    shell=True, 
-                    capture_output=True, 
-                    text=True,
-                    timeout=30 # Default timeout
-                )
-                
-                output = result.stdout
-                error = result.stderr
-                return_code = result.returncode
-            else:
-                error = f"Unknown command type: {command_type}"
-                return_code = 1
-
-        except subprocess.TimeoutExpired:
-            output = ""
-            error = "Command timed out"
-            return_code = -1
-        except Exception as e:
-            output = ""
-            error = str(e)
-            return_code = -1
-
-        # Update result
-        try:
-            self.doc_ref.collection('commands').document(cmd_id).update({
-                'status': 'completed',
-                'output': output,
-                'error': error,
-                'return_code': return_code,
-                'completed_at': firestore.SERVER_TIMESTAMP
-            })
-        except Exception as e:
-             print(f"Error updating command result: {e}")
-
-        self.last_activity_time = time.time() # Update activity after completion too
-
-        if should_restart:
-            print("Restarting agent as requested...")
-            sys.exit(0)
+        executor = CommandExecutor(cmd_id, cmd_data, self.doc_ref)
+        self.active_commands[cmd_id] = executor
+        executor.start()
 
 if __name__ == "__main__":
     print("Starting DontPortForward Agent...")

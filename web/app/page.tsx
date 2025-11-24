@@ -9,7 +9,9 @@ import {
   onSnapshot, 
   addDoc, 
   serverTimestamp,
-  limit
+  limit,
+  doc,
+  updateDoc
 } from "firebase/firestore";
 import DeviceList from "./components/DeviceList";
 import DeviceStatus from "./components/DeviceStatus";
@@ -19,7 +21,7 @@ interface CommandLog {
   command: string;
   output?: string;
   error?: string;
-  status: 'pending' | 'processing' | 'completed';
+  status: 'pending' | 'processing' | 'completed' | 'cancelled';
   created_at: any;
   completed_at?: any;
 }
@@ -169,6 +171,18 @@ export default function Home() {
     }
   };
 
+  const killCommand = async (cmdId: string) => {
+    if (!selectedDeviceId) return;
+    try {
+        const commandRef = doc(db, "devices", selectedDeviceId, "commands", cmdId);
+        await updateDoc(commandRef, {
+            kill_signal: true
+        });
+    } catch (error) {
+        console.error("Error killing command:", error);
+    }
+  };
+
   return (
     <main className="flex h-screen bg-gray-950 text-gray-200 font-mono overflow-hidden relative">
       
@@ -271,7 +285,18 @@ export default function Home() {
                         <span className="text-gray-500 opacity-50 shrink-0">$</span>
                         <span className="break-all">{log.command}</span>
                         {log.status === 'pending' && <span className="text-xs text-yellow-500 animate-pulse shrink-0">[pending]</span>}
-                        {log.status === 'processing' && <span className="text-xs text-blue-500 animate-pulse shrink-0">[running...]</span>}
+                        {log.status === 'processing' && (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-blue-500 animate-pulse shrink-0">[running...]</span>
+                                <button 
+                                    onClick={() => killCommand(log.id)}
+                                    className="text-xs text-red-500 hover:text-white bg-red-900/20 hover:bg-red-600 border border-red-900/50 px-2 py-0.5 rounded transition-colors"
+                                >
+                                    Stop
+                                </button>
+                            </div>
+                        )}
+                        {log.status === 'cancelled' && <span className="text-xs text-red-500 shrink-0">[cancelled]</span>}
                         </div>
                         
                         {log.output && (
