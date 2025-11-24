@@ -9,7 +9,6 @@ import os
 import json
 import sys
 import psutil
-import selectors
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -49,6 +48,23 @@ class CommandExecutor(threading.Thread):
         self.last_flush = time.time()
         self.kill_listener = None
 
+    def _read_stream(self, stream, buffer):
+        """Reads from a stream and appends to a buffer in a separate thread."""
+        try:
+            for line in iter(stream.readline, ''):
+                if line:
+                    buffer.append(line)
+                else:
+                    break
+        except Exception as e:
+            # Stream might be closed
+            pass
+        finally:
+            try:
+                stream.close()
+            except:
+                pass
+
     def run(self):
         command_str = self.cmd_data.get('command')
         command_type = self.cmd_data.get('type', 'shell')
@@ -69,7 +85,6 @@ class CommandExecutor(threading.Thread):
                 self.cmd_ref.update({'output': 'Agent restarting...', 'status': 'completed', 'completed_at': firestore.SERVER_TIMESTAMP})
                 print("Restarting agent...")
                 # We need to exit the main process, but we are in a thread.
-                # We can set a flag or just call sys.exit() (which kills the thread? or the process? sys.exit() in thread raises SystemExit in thread)
                 # To kill main process:
                 os._exit(0)
                 return
@@ -83,16 +98,16 @@ class CommandExecutor(threading.Thread):
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                bufsize=0 # Unbuffered? Or line buffered? 
-                # Note: text=True with bufsize=0 is not allowed. 
-                # We'll use default buffering and read often.
+                text=True
             )
             
-            # Use selectors to read non-blocking
-            sel = selectors.DefaultSelector()
-            sel.register(self.process.stdout, selectors.EVENT_READ)
-            sel.register(self.process.stderr, selectors.EVENT_READ)
+            # Start reader threads
+            stdout_thread = threading.Thread(target=self._read_stream, args=(self.process.stdout, self.output_buffer))
+            stderr_thread = threading.Thread(target=self._read_stream, args=(self.process.stderr, self.error_buffer))
+            stdout_thread.daemon = True
+            stderr_thread.daemon = True
+            stdout_thread.start()
+            stderr_thread.start()
 
             while True:
                 if self.should_stop:
@@ -106,16 +121,14 @@ class CommandExecutor(threading.Thread):
 
                 # Check if process ended
                 if self.process.poll() is not None:
-                    # Process ended, but consume remaining output
-                    self.read_output(sel, timeout=0)
+                    # Wait a bit for readers to finish capturing output
+                    stdout_thread.join(timeout=1)
+                    stderr_thread.join(timeout=1)
                     break
-                
-                # Read available data
-                if self.read_output(sel, timeout=0.1):
-                    pass
                 
                 # Flush to firestore if needed
                 self.flush_output()
+                time.sleep(0.1)
 
             return_code = self.process.returncode
             if self.should_stop:
@@ -152,65 +165,19 @@ class CommandExecutor(threading.Thread):
                  # Cleanup if still running
                  self.process.terminate()
 
-    def read_output(self, sel, timeout):
-        events = sel.select(timeout)
-        data_read = False
-        for key, mask in events:
-            # Check which pipe is ready
-            if key.fileobj == self.process.stdout:
-                line = self.process.stdout.read(1024) # Read chunk
-                if line:
-                    self.output_buffer.append(line)
-                    data_read = True
-            elif key.fileobj == self.process.stderr:
-                line = self.process.stderr.read(1024)
-                if line:
-                    self.error_buffer.append(line)
-                    data_read = True
-        return data_read
-
     def flush_output(self, force=False):
         current_time = time.time()
         # Flush every 1 second or if forced
         if force or (current_time - self.last_flush > 1.0):
             updates = {}
-            if self.output_buffer:
-                # Append to existing output? 
-                # Firestore transform arrayUnion? No, it's a string.
-                # We can't easily "append" to a string field atomically without a transaction.
-                # But since we are the only writer for 'output' usually...
-                # Actually, race conditions if we read-then-write.
-                # But we are the only one writing 'output'.
-                # Wait, if we just set 'output', we overwrite previous?
-                # We need to keep local state of total output?
-                # No, we can just send the new chunk?
-                # The UI expects full log or chunks?
-                # UI just shows `log.output`. If we overwrite, we lose history.
-                # We should append. 
-                # The easiest way with Firestore is to fetch current, append, and update.
-                # Or keep a running total in memory and update the whole field.
-                # Since we are the single writer, we can keep running total.
-                pass 
             
             # Let's keep a running total in memory for simplicity (assuming log isn't massive)
-            # If logs are massive, we should use a subcollection of log entries.
-            # For now, running total string.
             
             full_out = "".join(self.output_buffer)
             full_err = "".join(self.error_buffer)
             
-            # Since we only append new stuff to buffer, wait.
-            # self.output_buffer accumulates FOREVER in this loop?
-            # Yes, if we want to write the full string each time.
-            # If we want to save bandwidth, we shouldn't send full string every time.
-            # But Firestore doesn't support "string append" operation.
-            # So we have to send full string.
-            
             if full_out or full_err:
                 # We only update if there is something
-                # But we need the previous content if we cleared buffer?
-                # No, let's just keep accumulating in buffer and write the whole thing.
-                # It's inefficient for huge logs but fine for typical commands.
                 updates['output'] = full_out
                 updates['error'] = full_err
                 
@@ -221,40 +188,6 @@ class CommandExecutor(threading.Thread):
                     print(f"[{self.cmd_id}] Error flushing: {e}")
 
     def on_doc_update(self, col_snapshot, changes, read_time):
-        for change in changes:
-            # We are listening to a single document, so changes contain just that doc
-            # But on_snapshot returns QuerySnapshot logic?
-            # doc_ref.on_snapshot returns (doc_snapshot, changes, read_time) ?
-            # No, for document ref: (doc_snapshot, changes, read_time) is for collection query.
-            # For doc ref, callback signature is (doc_snapshot, changes, read_time).
-            # Wait, no.
-            # Doc ref snapshot listener: callback(doc_snapshot, changes, read_time)
-            # changes is list of Change objects.
-            pass
-        
-        # Actually simplest signature: callback(doc_snapshot, changes, read_time)
-        # But for a single document, 'changes' might not be populated same way?
-        # Let's just look at the doc_snapshot.
-        # But wait, the callback receives `(col_snapshot, changes, read_time)` only for collection queries?
-        # For document listen: `callback(doc_snapshot, changes, read_time)`?
-        # Let's check docs or assume standard behavior.
-        # Actually, standard python firebase-admin listener:
-        # `doc_ref.on_snapshot(callback)`
-        # `callback(doc_snapshot, changes, read_time)`
-        
-        # doc_snapshot is a list? No, for single doc it should be a DocumentSnapshot?
-        # Actually, the google-cloud-firestore python lib is tricky.
-        # Let's assume generic approach:
-        
-        # Wait, if I use `doc_ref.on_snapshot`, the first arg is `doc_snapshot`.
-        # Note: If it's a list (collection), it's `col_snapshot`.
-        
-        # Let's inspect what we get.
-        # If I get a list of snapshots (which I shouldn't for a doc ref listener, but maybe), I'll handle it.
-        # Actually, let's look at `on_command_snapshot` in original code (line 189).
-        # That was a collection query.
-        
-        # For a single document, let's just read the data from the first argument.
         try:
             # The first argument is the snapshot(s).
             # If it's a list (QuerySnapshot), iterate.
