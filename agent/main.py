@@ -53,6 +53,13 @@ IDLE_TIMEOUT = 60
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
 API_URL = "http://localhost:8000"
 
+# Global registry to track active commands for API access
+# Format: {cmd_id: CommandExecutor instance}
+# This will be shared with api.py
+active_commands_registry = {}
+
+# Registry will be synced with api.py in __main__ block
+
 # Initialize Firebase
 try:
     cred = credentials.ApplicationDefault()
@@ -156,16 +163,23 @@ class CommandExecutor(threading.Thread):
         self.cmd_ref = device_ref.collection('commands').document(cmd_id)
         self.process = None
         self.should_stop = False
-        self.output_buffer = []
-        self.error_buffer = []
+        self.output_buffer = []  # List of (timestamp, line) tuples for stdout
+        self.error_buffer = []   # List of (timestamp, line) tuples for stderr
         self.last_flush = time.time()
         self.kill_listener = None
+        self.flush_interval = 10.0  # Update status in Firestore every 10 seconds
+        self.command_start_time = time.time()
+        self.max_memory_lines = 10000  # Keep last 10k lines in memory (can be large, no DB limit)
 
     def _read_stream(self, stream, buffer):
         try:
             for line in iter(stream.readline, ''):
                 if line:
-                    buffer.append(line)
+                    # Store with timestamp for time-based queries
+                    buffer.append((time.time(), line))
+                    # Limit memory usage by keeping only recent lines
+                    if len(buffer) > self.max_memory_lines:
+                        buffer.pop(0)  # Remove oldest line
                 else:
                     break
         except Exception:
@@ -181,7 +195,11 @@ class CommandExecutor(threading.Thread):
         command_type = self.cmd_data.get('type', 'shell')
         
         print(f"[{self.cmd_id}] Executing: {command_str}")
+        self.command_start_time = time.time()
         self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
+        
+        # Register this command in the global registry for API access
+        active_commands_registry[self.cmd_id] = self
 
         try:
             self.cmd_ref.update({
@@ -262,12 +280,14 @@ class CommandExecutor(threading.Thread):
                     stderr_thread.join(timeout=1)
                     break
                 
+                # Check for new data less frequently to reduce CPU usage
                 self.flush_output()
-                time.sleep(0.1)
+                time.sleep(0.5)  # Check every 0.5s instead of 0.1s
 
             return_code = self.process.returncode
             error_msg = "Command cancelled by user." if self.should_stop else ""
 
+            # Final status update (no output written to DB)
             self.flush_output(force=True)
             
             update_data = {
@@ -276,16 +296,17 @@ class CommandExecutor(threading.Thread):
                 'completed_at': firestore.SERVER_TIMESTAMP
             }
             if self.should_stop:
-                update_data['error'] = (self.cmd_data.get('error', '') + '\n' + error_msg).strip()
                 update_data['status'] = 'cancelled'
 
             self.cmd_ref.update(update_data)
+            
+            # Keep in registry for a short time after completion for API access
+            # Will be cleaned up after a delay
 
         except Exception as e:
             print(f"[{self.cmd_id}] Error: {e}")
             self.cmd_ref.update({
                 'status': 'completed',
-                'error': str(e),
                 'completed_at': firestore.SERVER_TIMESTAMP
             })
         finally:
@@ -293,29 +314,47 @@ class CommandExecutor(threading.Thread):
                 self.kill_listener.unsubscribe()
             if self.process and self.process.poll() is None:
                  self.process.terminate()
+            # Unregister after a delay to allow API access to final output
+            def cleanup():
+                time.sleep(300)  # Keep for 5 minutes after completion
+                if self.cmd_id in active_commands_registry:
+                    del active_commands_registry[self.cmd_id]
+            threading.Thread(target=cleanup, daemon=True).start()
 
     def flush_output(self, force=False):
+        """Update status in Firestore periodically. Output is NOT written to DB."""
         current_time = time.time()
-        if force or (current_time - self.last_flush > 1.0):
-            updates = {}
-            full_out = "".join(self.output_buffer)
-            full_err = "".join(self.error_buffer)
-            
-            if full_out or full_err:
-                updates['output'] = full_out
-                updates['error'] = full_err
-                
-                try:
-                    self.cmd_ref.update(updates)
-                    self.last_flush = current_time
-                except Exception as e:
-                    print(f"[{self.cmd_id}] Error flushing: {e}")
-                    if "Resource exhausted" in str(e) or "Document too large" in str(e):
-                        self.cmd_ref.update({
-                            'error': full_err + "\n[Output truncated due to size limit]",
-                            'status': 'completed'
-                        })
-                        self.should_stop = True
+        elapsed = current_time - self.last_flush
+        
+        # Only update status periodically, not output
+        if not force and elapsed < self.flush_interval:
+            return
+        
+        # Update only status/metadata in Firestore, never output
+        try:
+            self.cmd_ref.update({
+                'last_activity': firestore.SERVER_TIMESTAMP,
+                'output_lines': len(self.output_buffer),
+                'error_lines': len(self.error_buffer)
+            })
+            self.last_flush = current_time
+        except Exception as e:
+            print(f"[{self.cmd_id}] Error updating status: {e}")
+    
+    def get_recent_output(self, seconds=60):
+        """Get output from the last N seconds. Returns (stdout, stderr) as strings."""
+        current_time = time.time()
+        cutoff_time = current_time - seconds
+        
+        # Filter lines by timestamp
+        recent_out = [line for ts, line in self.output_buffer if ts >= cutoff_time]
+        recent_err = [line for ts, line in self.error_buffer if ts >= cutoff_time]
+        
+        return "".join(recent_out), "".join(recent_err)
+    
+    def get_all_output(self):
+        """Get all output. Returns (stdout, stderr) as strings."""
+        return "".join(line for _, line in self.output_buffer), "".join(line for _, line in self.error_buffer)
 
     def on_doc_update(self, col_snapshot, changes, read_time):
         try:
@@ -327,8 +366,27 @@ class CommandExecutor(threading.Thread):
 
             for doc in docs:
                 data = doc.to_dict()
-                if data and data.get('kill_signal') is True:
-                    self.should_stop = True
+                if data:
+                    if data.get('kill_signal') is True:
+                        self.should_stop = True
+                    # Check for output request
+                    output_request = data.get('output_request')
+                    if output_request and isinstance(output_request, dict):
+                        seconds = output_request.get('seconds', 60)
+                        request_id = output_request.get('request_id')
+                        # Only process if we haven't handled this request yet
+                        if request_id and request_id != getattr(self, '_last_request_id', None):
+                            self._last_request_id = request_id
+                            # Get requested output and write to Firestore
+                            stdout, stderr = self.get_recent_output(seconds=seconds)
+                            try:
+                                self.cmd_ref.update({
+                                    'output': stdout,
+                                    'error': stderr,
+                                    'output_request': firestore.DELETE_FIELD  # Clear the request
+                                })
+                            except Exception as e:
+                                print(f"[{self.cmd_id}] Error handling output request: {e}")
         except Exception as e:
             print(f"Error in kill listener: {e}")
 
@@ -489,6 +547,13 @@ class Agent:
 
 if __name__ == "__main__":
     print("Starting DontPortForward Agent...")
+    
+    # Sync the registry with api.py module so they share the same dict
+    import sys
+    if 'api' in sys.modules:
+        sys.modules['api'].active_commands_registry = active_commands_registry
+    if 'agent.api' in sys.modules:
+        sys.modules['agent.api'].active_commands_registry = active_commands_registry
     
     # Start API in a separate thread
     api_thread = threading.Thread(target=start_api)

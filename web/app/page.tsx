@@ -39,6 +39,9 @@ interface CommandLog {
   status: 'pending' | 'processing' | 'completed' | 'cancelled';
   created_at: any;
   completed_at?: any;
+  last_activity?: any;
+  output_lines?: number;
+  error_lines?: number;
 }
 
 const SUGGESTED_COMMANDS = [
@@ -159,6 +162,43 @@ export default function Home() {
 
     return () => unsubscribe();
   }, [selectedDeviceId, user, viewMode]);
+
+  // Request output for active commands (polling mechanism)
+  useEffect(() => {
+    if (!selectedDeviceId || !user || viewMode !== 'console') return;
+
+    const requestOutputForActiveCommands = async () => {
+      // Find active commands that need output
+      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
+      
+      for (const log of activeLogs) {
+        // Only request if we don't have recent output or it's been a while
+        const needsUpdate = !log.output || 
+          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 10000);
+        
+        if (needsUpdate) {
+          try {
+            const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
+            await updateDoc(commandRef, {
+              output_request: {
+                seconds: 60,  // Request last 60 seconds
+                request_id: `${Date.now()}-${Math.random()}`
+              }
+            });
+          } catch (error) {
+            // Silently fail - command might not exist or be completed
+            console.debug("Could not request output:", error);
+          }
+        }
+      }
+    };
+
+    // Request output every 5 seconds for active commands
+    const interval = setInterval(requestOutputForActiveCommands, 5000);
+    requestOutputForActiveCommands(); // Initial request
+
+    return () => clearInterval(interval);
+  }, [selectedDeviceId, user, viewMode, logs]);
 
   // Handle Input Change & Autocomplete
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
