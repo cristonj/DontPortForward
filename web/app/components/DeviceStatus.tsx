@@ -39,6 +39,10 @@ interface DeviceStatusProps {
 }
 
 export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
+  /**
+   * Displays real-time status information for a selected device.
+   * Allows modifying the polling rate configuration.
+   */
   const [device, setDevice] = useState<Device | null>(null);
   const [loading, setLoading] = useState(true);
   const [localPollingRate, setLocalPollingRate] = useState<number | null>(null);

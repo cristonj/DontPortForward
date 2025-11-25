@@ -54,17 +54,18 @@ def should_reboot():
     return current_time == REBOOT_TIME
 
 def run_agent(root_dir):
-    """Runs the agent script as a subprocess."""
+    """
+    Runs the agent script as a subprocess.
+    
+    The agent is executed from its own directory ('agent/') to ensure
+    relative paths (like serviceAccountKey.json) work correctly.
+    """
     agent_path = os.path.join(root_dir, AGENT_SCRIPT_PATH)
     if not os.path.exists(agent_path):
         print(f"Error: Agent script not found at {agent_path}")
         return None
 
     print(f"Launching {agent_path}...")
-    # Run from the project root so imports work if needed, 
-    # or from agent dir? Usually agent dir is better for relative file access (like serviceAccountKey.json).
-    # The original agent code looks for serviceAccountKey.json in current dir.
-    # So let's run it from the agent directory.
     agent_dir = os.path.dirname(agent_path)
     return subprocess.Popen([sys.executable, "main.py"], cwd=agent_dir)
 

@@ -67,6 +67,10 @@ export default function Home() {
   // Expanded history logs state
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
 
+  /**
+   * Main dashboard component.
+   * Manages authentication, device selection, and view modes (console, files, api, status).
+   */
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
