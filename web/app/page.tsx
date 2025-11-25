@@ -241,26 +241,7 @@ export default function Home() {
     if (e) e.preventDefault();
     const cmdToRun = cmdString || inputCommand;
     
-    if (!cmdToRun.trim()) {
-      setErrorMsg("Please enter a command");
-      return;
-    }
-    
-    if (!selectedDeviceId) {
-      setErrorMsg("Please select a device first");
-      return;
-    }
-
-    if (!user) {
-      setErrorMsg("You must be logged in to send commands");
-      return;
-    }
-
-    if (!db) {
-      setErrorMsg("Database connection error. Please refresh the page.");
-      console.error("Firebase db is not initialized");
-      return;
-    }
+    if (!cmdToRun.trim() || !selectedDeviceId) return;
 
     try {
       const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
