@@ -78,7 +78,7 @@ const SUGGESTED_COMMANDS = [
  */
 const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boolean }) => {
   const lines = useMemo(() => text.split('\n'), [text]);
-  const maxLines = 50;
+  const maxLines = 10;
   const displayLines = useMemo(() => {
     if (lines.length <= maxLines) return lines;
     return lines.slice(-maxLines);
@@ -475,7 +475,7 @@ export default function Home() {
    * IMPACT: Prevents unnecessary function recreations and reduces garbage collection
    */
   const getLastLines = useMemo(() => {
-    return (text: string | undefined, maxLines: number = 50): string => {
+    return (text: string | undefined, maxLines: number = 10): string => {
       if (!text) return '';
       const lines = text.split('\n');
       if (lines.length <= maxLines) return text;
@@ -837,22 +837,22 @@ export default function Home() {
                                             </div>
                                         </div>
                                         
-                                        {/* Output Preview for Active Process - Last 50 lines */}
+                                        {/* Output Preview for Active Process - Last 10 lines */}
                                         <div className="bg-black/50 rounded p-3 font-mono text-xs text-gray-300 max-h-96 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-600 hover:scrollbar-thumb-gray-500 scrollbar-track-gray-900/50 border border-gray-800/50" style={{ scrollBehavior: 'smooth' }}>
                                             {(log.output || log.error) ? (
                                                 <div className="space-y-1">
                                                     {log.output && (
                                                         <div>
                                                             <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
-                                                                Output (Last 50 lines)
+                                                                Output (Last 10 lines)
                                                             </div>
-                                                            <LogOutput text={getLastLines(log.output, 50)} />
+                                                            <LogOutput text={getLastLines(log.output, 10)} />
                                                         </div>
                                                     )}
                                                     {log.error && (
                                                         <div className="mt-2">
                                                             <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                            <LogOutput text={getLastLines(log.error, 50)} isError={true} />
+                                                            <LogOutput text={getLastLines(log.error, 10)} isError={true} />
                                                         </div>
                                                     )}
                                                 </div>
@@ -937,15 +937,15 @@ export default function Home() {
                                                                 {log.output && (
                                                                     <div>
                                                                         <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
-                                                                            Output (Last 50 lines)
+                                                                            Output (Last 10 lines)
                                                                         </div>
-                                                                        <LogOutput text={getLastLines(log.output, 50)} />
+                                                                        <LogOutput text={getLastLines(log.output, 10)} />
                                                                     </div>
                                                                 )}
                                                                 {log.error && (
                                                                     <div>
                                                                         <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                                        <LogOutput text={getLastLines(log.error, 50)} isError={true} />
+                                                                        <LogOutput text={getLastLines(log.error, 10)} isError={true} />
                                                                     </div>
                                                                 )}
                                                             </div>
