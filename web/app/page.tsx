@@ -12,13 +12,15 @@ import {
   limit,
   doc,
   updateDoc,
-  writeBatch
+  writeBatch,
+  deleteDoc
 } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import DeviceList from "./components/DeviceList";
 import DeviceStatus from "./components/DeviceStatus";
 import SharedFolder from "./components/SharedFolder";
 import ApiExplorer from "./components/ApiExplorer";
+import SwipeToDeleteLogItem from "./components/SwipeToDeleteLogItem";
 
 interface CommandLog {
   id: string;
@@ -210,6 +212,15 @@ export default function Home() {
         });
     } catch (error) {
         console.error("Error killing command:", error);
+    }
+  };
+
+  const deleteCommand = async (logId: string) => {
+    if (!selectedDeviceId) return;
+    try {
+        await deleteDoc(doc(db, "devices", selectedDeviceId, "commands", logId));
+    } catch (error) {
+        console.error("Error deleting command:", error);
     }
   };
 
@@ -511,10 +522,11 @@ export default function Home() {
                                 {historyLogs.map(log => {
                                     const isExpanded = expandedLogs.has(log.id);
                                     return (
-                                    <div 
+                                    <SwipeToDeleteLogItem 
                                         key={log.id} 
-                                        className={`bg-gray-900/20 border border-gray-800 rounded-lg p-3 transition-colors cursor-pointer ${isExpanded ? 'bg-gray-900/60' : 'hover:bg-gray-900/40'}`}
+                                        onDelete={() => deleteCommand(log.id)}
                                         onClick={() => toggleLogExpansion(log.id)}
+                                        isExpanded={isExpanded}
                                     >
                                         <div className="flex items-start gap-3">
                                             <div className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${
@@ -564,7 +576,7 @@ export default function Home() {
                                                 )}
                                             </div>
                                         </div>
-                                    </div>
+                                    </SwipeToDeleteLogItem>
                                     );
                                 })}
                             </div>
