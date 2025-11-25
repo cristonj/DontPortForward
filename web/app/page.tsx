@@ -212,19 +212,19 @@ export default function Home() {
   /**
    * PERFORMANCE OPTIMIZATION: Output polling for active commands
    * 
-   * PROBLEM IDENTIFIED:
-   * - Original code polled every 5 seconds for ALL active commands
-   * - Made Firestore write requests even when not needed
-   * - When browser extensions block requests (ERR_BLOCKED_BY_CLIENT), errors pile up
-   * - This caused UI freezing and unresponsiveness
+   * CRITICAL FIX: Reduced from 10s to 30s polling interval to cut DB operations by 66%
+   * - Changed from ~6 operations/minute to ~2 operations/minute per active command
+   * - Added page visibility check to pause polling when tab is hidden
+   * - Increased last_activity threshold from 15s to 30s to reduce unnecessary requests
    * 
    * FIXES APPLIED:
-   * 1. Increased polling interval from 5s to 10s
-   * 2. Only poll if last_activity is > 15s old (was 10s)
-   * 3. Limit to max 3 concurrent requests to avoid overwhelming Firestore
+   * 1. Increased polling interval from 10s to 30s (was 5s originally)
+   * 2. Only poll if last_activity is > 30s old (was 15s)
+   * 3. Limit to max 2 concurrent requests (was 3) to further reduce load
    * 4. Skip polling if no active commands exist
-   * 5. Error detection: after 5 consecutive failures, pause for 30s and show warning
-   * 6. User notification when connection issues detected
+   * 5. Pause polling when page/tab is not visible (Page Visibility API)
+   * 6. Error detection: after 5 consecutive failures, pause for 60s (was 30s)
+   * 7. User notification when connection issues detected
    * 
    * TYPICAL ERRORS THIS PREVENTS:
    * - net::ERR_BLOCKED_BY_CLIENT (ad blockers, privacy extensions)
@@ -238,9 +238,16 @@ export default function Home() {
 
     let consecutiveErrors = 0;
     let isPollingEnabled = true;
+    let isPageVisible = true;
+
+    // Check if page is visible to pause polling when tab is hidden
+    const handleVisibilityChange = () => {
+      isPageVisible = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const requestOutputForActiveCommands = async () => {
-      if (!isPollingEnabled) return;
+      if (!isPollingEnabled || !isPageVisible) return;
       
       // Find active commands that need output
       const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
@@ -248,14 +255,14 @@ export default function Home() {
       // Skip if no active commands (saves unnecessary processing)
       if (activeLogs.length === 0) return;
       
-      // Limit to max 3 concurrent update requests to avoid overwhelming Firestore
-      // This prevents hitting rate limits and reduces network congestion
-      const logsToUpdate = activeLogs.slice(0, 3);
+      // Limit to max 2 concurrent update requests to avoid overwhelming Firestore
+      // Reduced from 3 to further minimize DB operations
+      const logsToUpdate = activeLogs.slice(0, 2);
       
       for (const log of logsToUpdate) {
-        // Only request if we don't have recent output or it's been a while (15s threshold)
+        // Only request if we don't have recent output or it's been a while (30s threshold, increased from 15s)
         const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 15000);
+          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 30000);
         
         if (needsUpdate) {
           try {
@@ -280,18 +287,21 @@ export default function Home() {
               setTimeout(() => { 
                 isPollingEnabled = true;
                 setShowConnectionWarning(false);
-              }, 30000); // Re-enable after 30s cooldown
+              }, 60000); // Re-enable after 60s cooldown (increased from 30s)
             }
           }
         }
       }
     };
 
-    // Poll every 10 seconds (doubled from original 5s for better performance)
-    const interval = setInterval(requestOutputForActiveCommands, 10000);
+    // Poll every 30 seconds (increased from 10s to reduce DB operations by 66%)
+    const interval = setInterval(requestOutputForActiveCommands, 30000);
     requestOutputForActiveCommands(); // Initial request on mount
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [selectedDeviceId, user, viewMode, logs]);
 
   // Handle Input Change & Autocomplete

@@ -167,7 +167,7 @@ class CommandExecutor(threading.Thread):
         self.error_buffer = []   # List of (timestamp, line) tuples for stderr
         self.last_flush = time.time()
         self.kill_listener = None
-        self.flush_interval = 10.0  # Update status in Firestore every 10 seconds
+        self.flush_interval = 30.0  # Update status in Firestore every 30 seconds (reduced from 10s to cut DB ops by 66%)
         self.command_start_time = time.time()
         self.max_memory_lines = 10000  # Keep last 10k lines in memory (can be large, no DB limit)
 
@@ -405,7 +405,7 @@ class Agent:
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
         
-        self.polling_rate = 10
+        self.polling_rate = 30  # Increased from 10s to 30s to reduce DB operations by 66%
         self.sleep_polling_rate = 60
         self.idle_timeout = IDLE_TIMEOUT
 
@@ -446,7 +446,7 @@ class Agent:
                 'ip': info.get('ip', '127.0.0.1'),
                 'stats': info.get('stats', {}),
                 'git': info.get('git', {}),
-                'polling_rate': 10,
+                'polling_rate': 30,  # Increased from 10s to 30s to reduce DB operations
                 'sleep_polling_rate': 60,
                 'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
             }
