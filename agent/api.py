@@ -17,6 +17,12 @@ app.add_middleware(
 )
 
 def get_ip_address():
+    """
+    Retrieves the primary IP address of the device.
+    Uses a connection to a public DNS server (8.8.8.8) to determine the
+    local IP address used for outbound traffic. This does not actually
+    establish a connection.
+    """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))

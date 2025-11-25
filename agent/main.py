@@ -27,6 +27,7 @@ root_dir = Path(__file__).resolve().parent.parent
 env_local = root_dir / 'web/.env.local'
 env_file = root_dir / 'web/.env'
 
+# Prioritize local env, then default env, then system env
 if env_local.exists():
     print(f"Loading env from {env_local}")
     load_dotenv(dotenv_path=env_local)
@@ -34,6 +35,7 @@ elif env_file.exists():
     print(f"Loading env from {env_file}")
     load_dotenv(dotenv_path=env_file)
 else:
+    # Fallback to system env or .env in current dir
     load_dotenv()
 
 # Configuration
@@ -76,6 +78,10 @@ def start_api():
         print(f"Failed to start API server: {e}")
 
 class FileSyncer(threading.Thread):
+    """
+    Background thread that syncs files between the local 'shared' folder
+    and the Firebase Storage bucket.
+    """
     def __init__(self, device_id):
         super().__init__()
         self.device_id = device_id
@@ -138,6 +144,10 @@ class FileSyncer(threading.Thread):
         self.should_stop = True
 
 class CommandExecutor(threading.Thread):
+    """
+    Handles the execution of a single command (shell or API) in a separate thread.
+    Captures stdout/stderr and updates Firestore in real-time.
+    """
     def __init__(self, cmd_id, cmd_data, device_ref):
         super().__init__()
         self.cmd_id = cmd_id
@@ -323,6 +333,10 @@ class CommandExecutor(threading.Thread):
 
 
 class Agent:
+    """
+    Main agent class that manages device registration, command polling,
+    and heartbeat reporting.
+    """
     def __init__(self, device_id):
         self.device_id = device_id
         self.running = True

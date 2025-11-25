@@ -52,6 +52,10 @@ const DefaultIcon = () => (
 );
 
 export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "", currentUserEmail }: DeviceListProps) {
+  /**
+   * Fetches and displays a list of online/offline devices from Firestore.
+   * Filters devices based on the allowed_emails field if currentUserEmail is provided.
+   */
   const [devices, setDevices] = useState<Device[]>([]);
 
   useEffect(() => {
