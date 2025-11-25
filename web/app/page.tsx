@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react";
 import { db, auth } from "../lib/firebase";
 import { 
   collection, 
@@ -61,6 +61,33 @@ const SUGGESTED_COMMANDS = [
   "top -b -n 1"
 ];
 
+// Memoized component for rendering log output to reduce re-renders
+const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boolean }) => {
+  const lines = useMemo(() => text.split('\n'), [text]);
+  const maxLines = 50;
+  const displayLines = useMemo(() => {
+    if (lines.length <= maxLines) return lines;
+    return lines.slice(-maxLines);
+  }, [lines, maxLines]);
+  
+  return (
+    <pre className={`whitespace-pre-wrap break-all leading-relaxed ${isError ? 'text-red-400/80' : ''}`}>
+      {displayLines.map((line, idx) => (
+        <div key={idx} className={isError ? 'hover:bg-red-900/10' : 'hover:bg-gray-800/30'}>
+          <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
+            {displayLines.length - maxLines + idx + 1 > 0 ? displayLines.length - maxLines + idx + 1 : idx + 1}
+          </span>
+          <span>{line || ' '}</span>
+        </div>
+      ))}
+    </pre>
+  );
+}, (prevProps, nextProps) => {
+  // Only re-render if text or isError changed
+  return prevProps.text === nextProps.text && prevProps.isError === nextProps.isError;
+});
+LogOutput.displayName = 'LogOutput';
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -83,6 +110,9 @@ export default function Home() {
   
   // Expanded history logs state
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  
+  // Connection issues warning
+  const [showConnectionWarning, setShowConnectionWarning] = useState(false);
 
   /**
    * Main dashboard component.
@@ -124,11 +154,11 @@ export default function Home() {
     if (savedId) setSelectedDeviceId(savedId);
   }, []);
 
-  const handleDeviceSelect = (id: string) => {
+  const handleDeviceSelect = useCallback((id: string) => {
       setSelectedDeviceId(id);
       localStorage.setItem("selectedDeviceId", id);
       setIsSidebarOpen(false); // Close sidebar on selection on mobile
-  };
+  }, []);
 
   // Listen for logs of the selected device - ONLY when console view is active
   useEffect(() => {
@@ -163,18 +193,29 @@ export default function Home() {
     return () => unsubscribe();
   }, [selectedDeviceId, user, viewMode]);
 
-  // Request output for active commands (polling mechanism)
+  // Request output for active commands (polling mechanism) - OPTIMIZED
   useEffect(() => {
     if (!selectedDeviceId || !user || viewMode !== 'console') return;
 
+    let consecutiveErrors = 0;
+    let isPollingEnabled = true;
+
     const requestOutputForActiveCommands = async () => {
+      if (!isPollingEnabled) return;
+      
       // Find active commands that need output
       const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
       
-      for (const log of activeLogs) {
+      // Skip if no active commands
+      if (activeLogs.length === 0) return;
+      
+      // Limit to max 3 concurrent update requests to avoid overwhelming Firestore
+      const logsToUpdate = activeLogs.slice(0, 3);
+      
+      for (const log of logsToUpdate) {
         // Only request if we don't have recent output or it's been a while
         const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 10000);
+          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 15000);
         
         if (needsUpdate) {
           try {
@@ -185,16 +226,28 @@ export default function Home() {
                 request_id: `${Date.now()}-${Math.random()}`
               }
             });
-          } catch (error) {
-            // Silently fail - command might not exist or be completed
+            consecutiveErrors = 0; // Reset error counter on success
+          } catch (error: any) {
+            consecutiveErrors++;
             console.debug("Could not request output:", error);
+            
+            // If we get too many errors (likely blocked by extension), reduce polling
+            if (consecutiveErrors > 5) {
+              console.warn("Multiple polling errors detected - reducing poll frequency");
+              setShowConnectionWarning(true);
+              isPollingEnabled = false;
+              setTimeout(() => { 
+                isPollingEnabled = true;
+                setShowConnectionWarning(false);
+              }, 30000); // Re-enable after 30s
+            }
           }
         }
       }
     };
 
-    // Request output every 5 seconds for active commands
-    const interval = setInterval(requestOutputForActiveCommands, 5000);
+    // Increased interval from 5s to 10s for better performance
+    const interval = setInterval(requestOutputForActiveCommands, 10000);
     requestOutputForActiveCommands(); // Initial request
 
     return () => clearInterval(interval);
@@ -237,7 +290,7 @@ export default function Home() {
       }
   };
 
-  const sendCommand = async (e?: React.FormEvent, cmdString?: string) => {
+  const sendCommand = useCallback(async (e?: React.FormEvent, cmdString?: string) => {
     if (e) e.preventDefault();
     const cmdToRun = cmdString || inputCommand;
     
@@ -268,7 +321,7 @@ export default function Home() {
         console.error("Firebase error code:", error.code);
       }
     }
-  };
+  }, [inputCommand, selectedDeviceId]);
 
   const handleRestart = async () => {
     if (!selectedDeviceId) return;
@@ -333,7 +386,7 @@ export default function Home() {
     }
   };
 
-  const toggleLogExpansion = (logId: string) => {
+  const toggleLogExpansion = useCallback((logId: string) => {
     setExpandedLogs(prev => {
         const next = new Set(prev);
         if (next.has(logId)) {
@@ -343,7 +396,7 @@ export default function Home() {
         }
         return next;
     });
-  };
+  }, []);
 
   const manualRefresh = async () => {
     if (!selectedDeviceId || !user) return;
@@ -366,13 +419,15 @@ export default function Home() {
     }
   };
 
-  // Helper function to get last N lines of text
-  const getLastLines = (text: string | undefined, maxLines: number = 50): string => {
-    if (!text) return '';
-    const lines = text.split('\n');
-    if (lines.length <= maxLines) return text;
-    return lines.slice(-maxLines).join('\n');
-  };
+  // Helper function to get last N lines of text - memoized
+  const getLastLines = useMemo(() => {
+    return (text: string | undefined, maxLines: number = 50): string => {
+      if (!text) return '';
+      const lines = text.split('\n');
+      if (lines.length <= maxLines) return text;
+      return lines.slice(-maxLines).join('\n');
+    };
+  }, []);
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -391,9 +446,15 @@ export default function Home() {
     }
   };
 
-  // Split logs into running and recent history
-  const runningLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
-  const historyLogs = logs.filter(log => !['pending', 'processing'].includes(log.status));
+  // Split logs into running and recent history - memoized to prevent recalculation on every render
+  const runningLogs = useMemo(() => 
+    logs.filter(log => ['pending', 'processing'].includes(log.status)), 
+    [logs]
+  );
+  const historyLogs = useMemo(() => 
+    logs.filter(log => !['pending', 'processing'].includes(log.status)), 
+    [logs]
+  );
 
   if (authLoading) {
       return <div className="h-screen w-screen flex items-center justify-center bg-black text-gray-500">Loading...</div>;
@@ -585,6 +646,26 @@ export default function Home() {
                     </button>
                   </div>
                 )}
+                {/* Connection Warning Banner */}
+                {showConnectionWarning && (
+                  <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <span>Connection issues detected. Check if a browser extension is blocking Firestore requests. Updates temporarily reduced.</span>
+                    </div>
+                    <button 
+                      onClick={() => setShowConnectionWarning(false)}
+                      className="text-yellow-400 hover:text-yellow-300 ml-4 shrink-0"
+                      aria-label="Dismiss warning"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
                 {/* Terminal Output */}
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
                     {/* Manual Refresh Button and Status */}
@@ -695,29 +776,13 @@ export default function Home() {
                                                             <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
                                                                 Output (Last 50 lines)
                                                             </div>
-                                                            <pre className="whitespace-pre-wrap break-all leading-relaxed">
-                                                                {getLastLines(log.output, 50).split('\n').map((line, idx, arr) => (
-                                                                    <div key={idx} className="hover:bg-gray-800/30">
-                                                                        <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
-                                                                            {arr.length - 50 + idx + 1 > 0 ? arr.length - 50 + idx + 1 : idx + 1}
-                                                                        </span>
-                                                                        <span>{line || ' '}</span>
-                                                                    </div>
-                                                                ))}
-                                                            </pre>
+                                                            <LogOutput text={getLastLines(log.output, 50)} />
                                                         </div>
                                                     )}
                                                     {log.error && (
                                                         <div className="mt-2">
                                                             <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                            <pre className="whitespace-pre-wrap break-all text-red-400/80 leading-relaxed">
-                                                                {getLastLines(log.error, 50).split('\n').map((line, idx) => (
-                                                                    <div key={idx} className="hover:bg-red-900/10">
-                                                                        <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">{idx + 1}</span>
-                                                                        <span>{line || ' '}</span>
-                                                                    </div>
-                                                                ))}
-                                                            </pre>
+                                                            <LogOutput text={getLastLines(log.error, 50)} isError={true} />
                                                         </div>
                                                     )}
                                                 </div>
@@ -804,29 +869,13 @@ export default function Home() {
                                                                         <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
                                                                             Output (Last 50 lines)
                                                                         </div>
-                                                                        <pre className="whitespace-pre-wrap break-all text-gray-300 leading-relaxed">
-                                                                            {getLastLines(log.output, 50).split('\n').map((line, idx, arr) => (
-                                                                                <div key={idx} className="hover:bg-gray-800/30">
-                                                                                    <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
-                                                                                        {arr.length - 50 + idx + 1 > 0 ? arr.length - 50 + idx + 1 : idx + 1}
-                                                                                    </span>
-                                                                                    <span>{line || ' '}</span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </pre>
+                                                                        <LogOutput text={getLastLines(log.output, 50)} />
                                                                     </div>
                                                                 )}
                                                                 {log.error && (
                                                                     <div>
                                                                         <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                                        <pre className="whitespace-pre-wrap break-all text-red-400/80 leading-relaxed">
-                                                                            {getLastLines(log.error, 50).split('\n').map((line, idx) => (
-                                                                                <div key={idx} className="hover:bg-red-900/10">
-                                                                                    <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">{idx + 1}</span>
-                                                                                    <span>{line || ' '}</span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </pre>
+                                                                        <LogOutput text={getLastLines(log.error, 50)} isError={true} />
                                                                     </div>
                                                                 )}
                                                             </div>
