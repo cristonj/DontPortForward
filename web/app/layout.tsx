@@ -16,6 +16,10 @@ export const metadata: Metadata = {
   title: "DontPortForward Console",
   description: "Remote device management console",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/globe.svg",
+    apple: "/globe.svg",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -26,8 +30,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: "cover",
   themeColor: "#000000",
 };
