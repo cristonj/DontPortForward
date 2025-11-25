@@ -61,6 +61,7 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const isForcedLogout = useRef(false);
 
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [inputCommand, setInputCommand] = useState("");
@@ -85,13 +86,19 @@ export default function Home() {
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setErrorMsg(""); // Clear previous errors
+      if (isForcedLogout.current) {
+        isForcedLogout.current = false;
+      } else {
+        setErrorMsg(""); // Clear previous errors
+      }
+
       if (currentUser && currentUser.email) {
         const envAllowed = process.env.NEXT_PUBLIC_ALLOWED_EMAILS;
         if (envAllowed) {
             const allowed = envAllowed.split(',').map(e => e.trim());
             if (!allowed.includes(currentUser.email)) {
                 console.log("Access denied for:", currentUser.email);
+                isForcedLogout.current = true;
                 await signOut(auth);
                 setErrorMsg("Access Denied: Your email is not in the allowed list.");
                 setUser(null);
