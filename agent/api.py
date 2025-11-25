@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Any
@@ -8,6 +8,10 @@ import subprocess
 import os
 import socket
 import glob
+
+# Command registry - will be set by main.py after initialization
+# This avoids circular import issues
+active_commands_registry = {}
 
 app = FastAPI()
 
@@ -192,5 +196,54 @@ def kill_process(pid: int):
         return {"status": "success", "pid": pid}
     except psutil.NoSuchProcess:
         raise HTTPException(status_code=404, detail="Process not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/commands/{cmd_id}/output")
+def get_command_output(cmd_id: str, seconds: int = Query(60, ge=1, le=3600, description="Number of seconds of output to retrieve")):
+    """
+    Get recent output for a command. Output is stored in memory only, not in database.
+    Returns the last N seconds of output (default 60 seconds).
+    """
+    try:
+        # Try to get from registry
+        if cmd_id not in active_commands_registry:
+            raise HTTPException(status_code=404, detail="Command not found or no longer available")
+        
+        executor = active_commands_registry[cmd_id]
+        stdout, stderr = executor.get_recent_output(seconds=seconds)
+        
+        return {
+            "cmd_id": cmd_id,
+            "output": stdout,
+            "error": stderr,
+            "seconds": seconds,
+            "status": "active" if executor.process and executor.process.poll() is None else "completed"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/commands/{cmd_id}/output/all")
+def get_all_command_output(cmd_id: str):
+    """
+    Get all available output for a command (up to memory limit).
+    """
+    try:
+        if cmd_id not in active_commands_registry:
+            raise HTTPException(status_code=404, detail="Command not found or no longer available")
+        
+        executor = active_commands_registry[cmd_id]
+        stdout, stderr = executor.get_all_output()
+        
+        return {
+            "cmd_id": cmd_id,
+            "output": stdout,
+            "error": stderr,
+            "status": "active" if executor.process and executor.process.poll() is None else "completed"
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
