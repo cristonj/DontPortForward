@@ -3,7 +3,12 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     match /devices/{deviceId} {
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && (
+        !('allowed_emails' in resource.data) ||
+        resource.data.allowed_emails == null ||
+        resource.data.allowed_emails.size() == 0 ||
+        request.auth.token.email in resource.data.allowed_emails
+      );
       allow write: if false; 
 
       match /commands/{commandId} {

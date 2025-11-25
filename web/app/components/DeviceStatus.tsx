@@ -65,6 +65,10 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
             setDevice(null);
         }
         setLoading(false);
+    }, (error) => {
+        console.error("Error fetching device status:", error);
+        setDevice(null);
+        setLoading(false);
     });
 
     return () => unsub();
