@@ -88,13 +88,13 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   };
 
   return (
-    <div className="h-full flex flex-col p-4 sm:p-6 text-gray-200 font-mono">
+    <div className="h-full flex flex-col p-4 sm:p-6 text-gray-200 font-mono overflow-y-auto md:overflow-hidden">
       <div className="mb-6">
         <h2 className="text-xl font-bold text-white mb-2">API Explorer</h2>
         <p className="text-sm text-gray-500">Explore the agent's local API endpoints.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 md:min-h-0">
         {/* Sidebar: Endpoints */}
         <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
           <div className="p-3 border-b border-gray-800 bg-gray-900/80 font-bold text-sm text-gray-400 uppercase tracking-wider">
@@ -125,7 +125,7 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
         </div>
 
         {/* Main Area: Request & Response */}
-        <div className="md:col-span-2 flex flex-col gap-4 min-h-0">
+        <div className="md:col-span-2 flex flex-col gap-4 md:min-h-0">
             {/* Request Details */}
             <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-5 flex flex-col gap-4">
                 <div className="flex items-center gap-3">
