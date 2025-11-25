@@ -93,7 +93,7 @@ export default function Home() {
       }
 
       if (currentUser && currentUser.email) {
-        const envAllowed = process.env.NEXT_PUBLIC_ALLOWED_EMAILS;
+        const envAllowed = process.env.ALLOWED_EMAILS;
         if (envAllowed) {
             const allowed = envAllowed.split(',').map(e => e.trim());
             if (!allowed.includes(currentUser.email)) {
