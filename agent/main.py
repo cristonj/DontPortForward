@@ -160,6 +160,12 @@ class CommandExecutor(threading.Thread):
         self.error_buffer = []
         self.last_flush = time.time()
         self.kill_listener = None
+        # Optimization: Track what's already been sent to avoid redundant writes
+        self.sent_output_length = 0
+        self.sent_error_length = 0
+        self.flush_interval = 5.0  # Start with 5 seconds, will adapt
+        self.max_output_size = 50000  # Keep only last 50KB in DB (Firestore limit is 1MB)
+        self.command_start_time = time.time()
 
     def _read_stream(self, stream, buffer):
         try:
@@ -181,6 +187,7 @@ class CommandExecutor(threading.Thread):
         command_type = self.cmd_data.get('type', 'shell')
         
         print(f"[{self.cmd_id}] Executing: {command_str}")
+        self.command_start_time = time.time()
         self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
 
         try:
@@ -262,8 +269,9 @@ class CommandExecutor(threading.Thread):
                     stderr_thread.join(timeout=1)
                     break
                 
+                # Check for new data less frequently to reduce CPU usage
                 self.flush_output()
-                time.sleep(0.1)
+                time.sleep(0.5)  # Check every 0.5s instead of 0.1s
 
             return_code = self.process.returncode
             error_msg = "Command cancelled by user." if self.should_stop else ""
@@ -296,26 +304,78 @@ class CommandExecutor(threading.Thread):
 
     def flush_output(self, force=False):
         current_time = time.time()
-        if force or (current_time - self.last_flush > 1.0):
-            updates = {}
-            full_out = "".join(self.output_buffer)
-            full_err = "".join(self.error_buffer)
+        elapsed = current_time - self.last_flush
+        
+        # Adaptive flush interval: increase for long-running commands
+        runtime = current_time - self.command_start_time
+        if runtime > 300:  # After 5 minutes
+            self.flush_interval = 30.0  # Flush every 30 seconds
+        elif runtime > 60:  # After 1 minute
+            self.flush_interval = 10.0  # Flush every 10 seconds
+        
+        # Only flush if enough time has passed or forced, AND there's new data
+        if not force and elapsed < self.flush_interval:
+            return
+        
+        # Check if there's actually new data to send
+        full_out = "".join(self.output_buffer)
+        full_err = "".join(self.error_buffer)
+        
+        new_output = full_out[self.sent_output_length:]
+        new_error = full_err[self.sent_error_length:]
+        
+        # Skip if no new data (unless forced)
+        if not force and not new_output and not new_error:
+            return
+        
+        # Truncate to max size for storage, keeping only the most recent output
+        # This prevents Firestore document size issues while preserving recent data
+        stored_out = full_out[-self.max_output_size:] if len(full_out) > self.max_output_size else full_out
+        stored_err = full_err[-self.max_output_size:] if len(full_err) > self.max_output_size else full_err
+        
+        # Periodically clean up buffer to prevent unbounded growth (only if significantly over limit)
+        # Keep 2x max size in buffer to allow smooth truncation
+        buffer_limit = self.max_output_size * 2
+        if len(full_out) > buffer_limit:
+            # Keep only recent data in buffer
+            self.output_buffer = [full_out[-buffer_limit:]]
+            self.sent_output_length = max(0, self.sent_output_length - (len(full_out) - buffer_limit))
+        
+        if len(full_err) > buffer_limit:
+            self.error_buffer = [full_err[-buffer_limit:]]
+            self.sent_error_length = max(0, self.sent_error_length - (len(full_err) - buffer_limit))
+        
+        updates = {}
+        if stored_out or stored_err:
+            # Only update if there's actual content
+            if stored_out:
+                updates['output'] = stored_out
+            if stored_err:
+                updates['error'] = stored_err
             
-            if full_out or full_err:
-                updates['output'] = full_out
-                updates['error'] = full_err
-                
-                try:
-                    self.cmd_ref.update(updates)
-                    self.last_flush = current_time
-                except Exception as e:
-                    print(f"[{self.cmd_id}] Error flushing: {e}")
-                    if "Resource exhausted" in str(e) or "Document too large" in str(e):
+            try:
+                self.cmd_ref.update(updates)
+                self.last_flush = current_time
+                # Track what we've sent (for incremental tracking)
+                # Use stored lengths since that's what's in Firestore
+                self.sent_output_length = len(stored_out)
+                self.sent_error_length = len(stored_err)
+            except Exception as e:
+                print(f"[{self.cmd_id}] Error flushing: {e}")
+                if "Resource exhausted" in str(e) or "Document too large" in str(e):
+                    # Truncate more aggressively - keep only last 25KB
+                    truncated_out = (stored_out[-self.max_output_size//2:] + "\n[Output truncated due to size limit]") if stored_out else ""
+                    truncated_err = (stored_err[-self.max_output_size//2:] + "\n[Output truncated due to size limit]") if stored_err else ""
+                    try:
                         self.cmd_ref.update({
-                            'error': full_err + "\n[Output truncated due to size limit]",
+                            'output': truncated_out,
+                            'error': truncated_err,
                             'status': 'completed'
                         })
-                        self.should_stop = True
+                    except:
+                        # If even truncated version fails, just mark as completed
+                        self.cmd_ref.update({'status': 'completed'})
+                    self.should_stop = True
 
     def on_doc_update(self, col_snapshot, changes, read_time):
         try:
