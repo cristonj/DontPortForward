@@ -16,11 +16,19 @@ import {
   deleteDoc
 } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
+import dynamic from 'next/dynamic';
 import DeviceList from "./components/DeviceList";
-import DeviceStatus from "./components/DeviceStatus";
-import SharedFolder from "./components/SharedFolder";
-import ApiExplorer from "./components/ApiExplorer";
 import SwipeToDeleteLogItem from "./components/SwipeToDeleteLogItem";
+
+const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
+  loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
+});
+const SharedFolder = dynamic(() => import('./components/SharedFolder'), {
+  loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading files...</div>
+});
+const ApiExplorer = dynamic(() => import('./components/ApiExplorer'), {
+  loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading API explorer...</div>
+});
 
 interface CommandLog {
   id: string;

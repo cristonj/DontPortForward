@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { storage } from "../../lib/firebase";
+import { app } from "../../lib/firebase";
 import { 
+  getStorage,
   ref, 
   listAll, 
   uploadBytes, 
@@ -10,6 +11,9 @@ import {
   deleteObject,
   StorageReference
 } from "firebase/storage";
+
+// Initialize storage here so it's only loaded when this component is imported
+const storage = getStorage(app);
 
 interface SharedFolderProps {
   deviceId: string;
