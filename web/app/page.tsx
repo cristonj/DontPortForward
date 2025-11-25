@@ -251,6 +251,7 @@ export default function Home() {
         status: 'pending',
         created_at: serverTimestamp()
       });
+      setErrorMsg(""); // Clear any previous errors
       if (!cmdString) {
           setInputCommand("");
           setShowSuggestions(false);
@@ -258,8 +259,14 @@ export default function Home() {
           // Switch to console view to see output
           setViewMode('console');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error sending command:", error);
+      const errorMessage = error?.message || "Failed to send command. Check console for details.";
+      setErrorMsg(`Error: ${errorMessage}`);
+      // Log full error details for debugging
+      if (error?.code) {
+        console.error("Firebase error code:", error.code);
+      }
     }
   };
 
@@ -563,6 +570,21 @@ export default function Home() {
           {/* Main Content Area */}
           {viewMode === 'console' ? (
               <>
+                {/* Error Banner */}
+                {errorMsg && (
+                  <div className="bg-red-500/10 border-b border-red-500/50 text-red-400 px-4 py-2 text-sm flex items-center justify-between">
+                    <span>{errorMsg}</span>
+                    <button 
+                      onClick={() => setErrorMsg("")}
+                      className="text-red-400 hover:text-red-300 ml-4"
+                      aria-label="Dismiss error"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
                 {/* Terminal Output */}
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
                     {/* Manual Refresh Button and Status */}
