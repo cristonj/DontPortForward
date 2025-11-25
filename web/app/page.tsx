@@ -127,6 +127,10 @@ export default function Home() {
   
   // Connection issues warning
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
+  
+  // Auto-polling state (disabled by default to reduce DB operations)
+  const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
+  const [isRequestingOutput, setIsRequestingOutput] = useState(false);
 
   /**
    * Main dashboard component.
@@ -212,29 +216,26 @@ export default function Home() {
   /**
    * PERFORMANCE OPTIMIZATION: Output polling for active commands
    * 
-   * CRITICAL FIX: Reduced from 10s to 30s polling interval to cut DB operations by 66%
-   * - Changed from ~6 operations/minute to ~2 operations/minute per active command
-   * - Added page visibility check to pause polling when tab is hidden
-   * - Increased last_activity threshold from 15s to 30s to reduce unnecessary requests
+   * MANUAL CONTROL: Auto-polling is now OPTIONAL and disabled by default
+   * - Users can enable auto-polling via toggle button
+   * - Manual "Request Output" button available for on-demand updates
+   * - This reduces DB operations to near-zero when auto-polling is off
    * 
    * FIXES APPLIED:
-   * 1. Increased polling interval from 10s to 30s (was 5s originally)
-   * 2. Only poll if last_activity is > 30s old (was 15s)
-   * 3. Limit to max 2 concurrent requests (was 3) to further reduce load
-   * 4. Skip polling if no active commands exist
+   * 1. Auto-polling disabled by default (was enabled every 30s)
+   * 2. Manual button to request output for active commands
+   * 3. Toggle to enable/disable auto-polling
+   * 4. When enabled: polls every 30s (reduced from 10s)
    * 5. Pause polling when page/tab is not visible (Page Visibility API)
-   * 6. Error detection: after 5 consecutive failures, pause for 60s (was 30s)
-   * 7. User notification when connection issues detected
+   * 6. Error detection: after 5 consecutive failures, pause for 60s
    * 
    * TYPICAL ERRORS THIS PREVENTS:
    * - net::ERR_BLOCKED_BY_CLIENT (ad blockers, privacy extensions)
    * - Firestore quota exhaustion from too many writes
    * - Browser main thread blocking from failed network requests
-   * 
-   * MONITORING: Check console for "Multiple polling errors detected" warning
    */
   useEffect(() => {
-    if (!selectedDeviceId || !user || viewMode !== 'console') return;
+    if (!selectedDeviceId || !user || viewMode !== 'console' || !autoPollingEnabled) return;
 
     let consecutiveErrors = 0;
     let isPollingEnabled = true;
@@ -246,7 +247,7 @@ export default function Home() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    const requestOutputForActiveCommands = async () => {
+    const autoRequestOutput = async () => {
       if (!isPollingEnabled || !isPageVisible) return;
       
       // Find active commands that need output
@@ -256,11 +257,10 @@ export default function Home() {
       if (activeLogs.length === 0) return;
       
       // Limit to max 2 concurrent update requests to avoid overwhelming Firestore
-      // Reduced from 3 to further minimize DB operations
       const logsToUpdate = activeLogs.slice(0, 2);
       
       for (const log of logsToUpdate) {
-        // Only request if we don't have recent output or it's been a while (30s threshold, increased from 15s)
+        // Only request if we don't have recent output or it's been a while (30s threshold)
         const needsUpdate = !log.output || 
           (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 30000);
         
@@ -279,7 +279,6 @@ export default function Home() {
             console.debug("Could not request output:", error);
             
             // Error handling: If too many failures, likely blocked by browser extension
-            // Common causes: uBlock Origin, Privacy Badger, ad blockers
             if (consecutiveErrors > 5) {
               console.warn("Multiple polling errors detected - reducing poll frequency");
               setShowConnectionWarning(true);
@@ -287,21 +286,57 @@ export default function Home() {
               setTimeout(() => { 
                 isPollingEnabled = true;
                 setShowConnectionWarning(false);
-              }, 60000); // Re-enable after 60s cooldown (increased from 30s)
+              }, 60000);
             }
           }
         }
       }
     };
 
-    // Poll every 30 seconds (increased from 10s to reduce DB operations by 66%)
-    const interval = setInterval(requestOutputForActiveCommands, 30000);
-    requestOutputForActiveCommands(); // Initial request on mount
+    // Poll every 30 seconds when auto-polling is enabled
+    const interval = setInterval(autoRequestOutput, 30000);
+    autoRequestOutput(); // Initial request on mount
 
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
+  }, [selectedDeviceId, user, viewMode, logs, autoPollingEnabled]);
+
+  // Manual function to request output for active commands
+  const requestOutputForActiveCommands = useCallback(async () => {
+    if (!selectedDeviceId || !user || viewMode !== 'console') return;
+    
+    setIsRequestingOutput(true);
+    try {
+      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
+      
+      if (activeLogs.length === 0) {
+        setIsRequestingOutput(false);
+        return;
+      }
+      
+      // Request output for all active commands
+      const requests = activeLogs.map(async (log) => {
+        try {
+          const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
+          await updateDoc(commandRef, {
+            output_request: {
+              seconds: 60,
+              request_id: `${Date.now()}-${Math.random()}`
+            }
+          });
+        } catch (error: any) {
+          console.debug("Could not request output for command:", log.id, error);
+        }
+      });
+      
+      await Promise.all(requests);
+    } catch (error: any) {
+      console.error("Error requesting output:", error);
+    } finally {
+      setIsRequestingOutput(false);
+    }
   }, [selectedDeviceId, user, viewMode, logs]);
 
   // Handle Input Change & Autocomplete
@@ -748,14 +783,35 @@ export default function Home() {
                 )}
                 {/* Terminal Output */}
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
-                    {/* Manual Refresh Button and Status */}
+                    {/* Manual Control Buttons */}
                     {selectedDeviceId && (
                         <div className="fixed top-20 right-4 z-30 flex flex-col gap-2 items-end">
+                            {/* Request Output Button */}
+                            {runningLogs.length > 0 && (
+                                <button
+                                    onClick={requestOutputForActiveCommands}
+                                    disabled={isRequestingOutput}
+                                    className="bg-blue-600/90 hover:bg-blue-500 backdrop-blur-sm border border-blue-500/50 text-white px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium disabled:opacity-50"
+                                    title="Request output for active commands"
+                                >
+                                    <svg 
+                                        className={`w-4 h-4 ${isRequestingOutput ? 'animate-spin' : ''}`} 
+                                        fill="none" 
+                                        stroke="currentColor" 
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    {isRequestingOutput ? 'Requesting...' : 'Request Output'}
+                                </button>
+                            )}
+                            
+                            {/* Refresh Logs Button */}
                             <button
                                 onClick={manualRefresh}
                                 disabled={isRefreshing}
                                 className="bg-gray-800/90 hover:bg-gray-700 backdrop-blur-sm border border-gray-700 text-gray-300 px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium disabled:opacity-50"
-                                title="Manually refresh terminal"
+                                title="Refresh command logs"
                             >
                                 <svg 
                                     className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} 
@@ -765,14 +821,57 @@ export default function Home() {
                                 >
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                                 </svg>
-                                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                                {isRefreshing ? 'Refreshing...' : 'Refresh Logs'}
                             </button>
-                            <div className="bg-gray-800/90 backdrop-blur-sm border border-gray-700 px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-2 text-[10px]">
+                            
+                            {/* Auto-Polling Toggle */}
+                            <button
+                                onClick={() => setAutoPollingEnabled(!autoPollingEnabled)}
+                                className={`backdrop-blur-sm border px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium ${
+                                    autoPollingEnabled
+                                        ? 'bg-green-600/90 hover:bg-green-500 border-green-500/50 text-white'
+                                        : 'bg-gray-800/90 hover:bg-gray-700 border-gray-700 text-gray-300'
+                                }`}
+                                title={autoPollingEnabled ? 'Disable auto-polling' : 'Enable auto-polling (updates every 30s)'}
+                            >
                                 <span className="relative flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                    {autoPollingEnabled && (
+                                        <>
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                        </>
+                                    )}
+                                    {!autoPollingEnabled && (
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500"></span>
+                                    )}
                                 </span>
-                                <span className="text-gray-400 uppercase tracking-wider">Live Updates</span>
+                                {autoPollingEnabled ? 'Auto: ON' : 'Auto: OFF'}
+                            </button>
+                            
+                            {/* Status Indicator */}
+                            <div className={`backdrop-blur-sm border px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-2 text-[10px] ${
+                                autoPollingEnabled
+                                    ? 'bg-gray-800/90 border-gray-700'
+                                    : 'bg-gray-900/90 border-gray-800'
+                            }`}>
+                                <span className={`relative flex h-2 w-2 ${
+                                    autoPollingEnabled ? 'text-green-400' : 'text-gray-500'
+                                }`}>
+                                    {autoPollingEnabled && (
+                                        <>
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                        </>
+                                    )}
+                                    {!autoPollingEnabled && (
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500"></span>
+                                    )}
+                                </span>
+                                <span className={`uppercase tracking-wider ${
+                                    autoPollingEnabled ? 'text-gray-300' : 'text-gray-500'
+                                }`}>
+                                    {autoPollingEnabled ? 'Live Updates' : 'Manual Mode'}
+                                </span>
                             </div>
                         </div>
                     )}
