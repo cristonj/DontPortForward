@@ -182,6 +182,7 @@ class CommandExecutor(threading.Thread):
             if command_type == 'restart':
                 self.cmd_ref.update({'output': 'Agent restarting...', 'status': 'completed', 'completed_at': firestore.SERVER_TIMESTAMP})
                 print("Restarting agent...")
+                time.sleep(2) # Allow time for firestore update to flush
                 os._exit(0)
                 return
 
