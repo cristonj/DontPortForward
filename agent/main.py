@@ -9,7 +9,8 @@ import platform
 import os
 import json
 import sys
-import psutil
+import requests
+import uvicorn
 from dotenv import load_dotenv
 from pathlib import Path
 import warnings
@@ -18,10 +19,9 @@ import warnings
 warnings.filterwarnings("ignore", message="As the c extension couldn't be imported")
 
 # Load environment variables
-# Try to find .env.local or .env in the project root (parent of agent directory)
 root_dir = Path(__file__).resolve().parent.parent
-env_local = root_dir / '.env.local'
-env_file = root_dir / '.env'
+env_local = root_dir / 'web/.env.local'
+env_file = root_dir / 'web/.env'
 
 if env_local.exists():
     print(f"Loading env from {env_local}")
@@ -30,12 +30,12 @@ elif env_file.exists():
     print(f"Loading env from {env_file}")
     load_dotenv(dotenv_path=env_file)
 else:
-    # Fallback to default behavior (current dir search)
     load_dotenv()
 
 # Configuration
 PROJECT_ID = os.getenv("NEXT_PUBLIC_FIREBASE_PROJECT_ID")
 STORAGE_BUCKET = os.getenv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET")
+ALLOWED_EMAILS = os.getenv("ALLOWED_EMAILS", "")
 
 if not PROJECT_ID:
     print("Warning: NEXT_PUBLIC_FIREBASE_PROJECT_ID not found in environment variables.")
@@ -45,6 +45,7 @@ if not STORAGE_BUCKET:
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
 IDLE_TIMEOUT = 30
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
+API_URL = "http://localhost:8000"
 
 # Initialize Firebase
 try:
@@ -62,6 +63,21 @@ except Exception as e:
     print(f"Error initializing Firebase: {e}")
     pass
 
+def start_api():
+    """Starts the FastAPI server."""
+    # We use agent.api if running from root, or just api if running from agent dir?
+    # uvicorn expects import string.
+    # Assuming running from root: uvicorn agent.api:app
+    # If running from agent dir: uvicorn api:app
+    # Let's try to detect or just assume standard running 'python agent/main.py' from root.
+    # If running as 'python agent/main.py', sys.path[0] is agent/.
+    
+    # We will run uvicorn programmatically.
+    try:
+        uvicorn.run("agent.api:app", host="0.0.0.0", port=8000, log_level="error", reload=False)
+    except Exception as e:
+        print(f"Failed to start API server: {e}")
+
 class FileSyncer(threading.Thread):
     def __init__(self, device_id):
         super().__init__()
@@ -77,13 +93,12 @@ class FileSyncer(threading.Thread):
         
         while not self.should_stop:
             try:
-                # print("Checking for file updates...")
                 blobs = list(bucket.list_blobs(prefix=prefix))
                 
                 # Remote -> Local Sync
                 for blob in blobs:
                     filename = os.path.basename(blob.name)
-                    if not filename: continue # Skip directory marker if any
+                    if not filename: continue 
                     
                     local_file_path = os.path.join(self.local_path, filename)
                     remote_mtime = blob.updated.timestamp()
@@ -93,9 +108,7 @@ class FileSyncer(threading.Thread):
                         download = True
                         print(f"New file found: {filename}")
                     else:
-                        # Check modification time
                         local_mtime = os.path.getmtime(local_file_path)
-                        # We allow some drift, or just strict newer
                         if remote_mtime > local_mtime:
                             download = True
                             print(f"File updated: {filename}")
@@ -103,22 +116,14 @@ class FileSyncer(threading.Thread):
                     if download:
                         print(f"Downloading {filename}...")
                         blob.download_to_filename(local_file_path)
-                        # Touch local file to match remote time to avoid loop? 
-                        # Or just accept that next check local_mtime will be now.
-                        # If we set local_mtime to remote_mtime, it handles it.
                         os.utime(local_file_path, (remote_mtime, remote_mtime))
 
-                # Local -> Remote Sync (Optional, implementing Delete if remote deleted?)
-                # For now, let's keep it additive/update from remote as source of truth.
-                # If we want exact copy, we should delete local files not in remote.
-                
+                # Local -> Remote Sync (Deletion)
                 remote_filenames = {os.path.basename(b.name) for b in blobs if os.path.basename(b.name)}
                 local_filenames = set(os.listdir(self.local_path))
                 
                 for filename in local_filenames:
                     if filename not in remote_filenames:
-                        # Only delete if it's not a temporary file or something
-                        # Assume managed folder
                         print(f"File deleted remotely, removing local: {filename}")
                         try:
                             os.remove(os.path.join(self.local_path, filename))
@@ -128,7 +133,6 @@ class FileSyncer(threading.Thread):
             except Exception as e:
                 print(f"Error in FileSyncer: {e}")
             
-            # Sleep
             for _ in range(10): 
                 if self.should_stop: break
                 time.sleep(1)
@@ -151,15 +155,13 @@ class CommandExecutor(threading.Thread):
         self.kill_listener = None
 
     def _read_stream(self, stream, buffer):
-        """Reads from a stream and appends to a buffer in a separate thread."""
         try:
             for line in iter(stream.readline, ''):
                 if line:
                     buffer.append(line)
                 else:
                     break
-        except Exception as e:
-            # Stream might be closed
+        except Exception:
             pass
         finally:
             try:
@@ -172,12 +174,9 @@ class CommandExecutor(threading.Thread):
         command_type = self.cmd_data.get('type', 'shell')
         
         print(f"[{self.cmd_id}] Executing: {command_str}")
-
-        # Listen for kill signal
         self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
 
         try:
-            # Mark as processing
             self.cmd_ref.update({
                 'status': 'processing',
                 'started_at': firestore.SERVER_TIMESTAMP
@@ -186,19 +185,12 @@ class CommandExecutor(threading.Thread):
             if command_type == 'restart':
                 self.cmd_ref.update({'output': 'Agent restarting...', 'status': 'completed', 'completed_at': firestore.SERVER_TIMESTAMP})
                 print("Restarting agent...")
-                # We need to exit the main process, but we are in a thread.
-                # To kill main process:
                 os._exit(0)
                 return
 
             if not command_str:
                 raise ValueError("No command string provided")
 
-            # Start process
-            # Force python output to be unbuffered using -u if the command is python
-            # But the user might run 'python script.py' or just 'script.py'.
-            # A generic way to unbuffer stdout in python subprocess is setting env var PYTHONUNBUFFERED=1
-            
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
 
@@ -209,10 +201,9 @@ class CommandExecutor(threading.Thread):
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
-                cwd=os.path.dirname(os.path.abspath(__file__)) # Set CWD to agent dir so 'shared/script.py' works
+                cwd=os.path.dirname(os.path.abspath(__file__))
             )
             
-            # Start reader threads
             stdout_thread = threading.Thread(target=self._read_stream, args=(self.process.stdout, self.output_buffer))
             stderr_thread = threading.Thread(target=self._read_stream, args=(self.process.stderr, self.error_buffer))
             stdout_thread.daemon = True
@@ -230,27 +221,19 @@ class CommandExecutor(threading.Thread):
                         self.process.kill()
                     break
 
-                # Check if process ended
                 if self.process.poll() is not None:
-                    # Wait a bit for readers to finish capturing output
                     stdout_thread.join(timeout=1)
                     stderr_thread.join(timeout=1)
                     break
                 
-                # Flush to firestore if needed
                 self.flush_output()
                 time.sleep(0.1)
 
             return_code = self.process.returncode
-            if self.should_stop:
-                error_msg = "Command cancelled by user."
-            else:
-                error_msg = ""
+            error_msg = "Command cancelled by user." if self.should_stop else ""
 
-            # Final flush
             self.flush_output(force=True)
             
-            # Update final status
             update_data = {
                 'status': 'completed',
                 'return_code': return_code,
@@ -265,7 +248,7 @@ class CommandExecutor(threading.Thread):
         except Exception as e:
             print(f"[{self.cmd_id}] Error: {e}")
             self.cmd_ref.update({
-                'status': 'completed', # or error
+                'status': 'completed',
                 'error': str(e),
                 'completed_at': firestore.SERVER_TIMESTAMP
             })
@@ -273,29 +256,14 @@ class CommandExecutor(threading.Thread):
             if self.kill_listener:
                 self.kill_listener.unsubscribe()
             if self.process and self.process.poll() is None:
-                 # Cleanup if still running
                  self.process.terminate()
 
     def flush_output(self, force=False):
         current_time = time.time()
-        # Flush every 1 second or if forced
         if force or (current_time - self.last_flush > 1.0):
             updates = {}
-            
-            # Use current buffer length to determine what's new (though we just concat everything)
-            # To properly stream chunks for VERY long outputs without exceeding Firestore document limit,
-            # one would need to use subcollections or separate docs.
-            # But for "streaming" updates to the same doc, we just update the field.
-            # If the output gets massive (>1MB), Firestore will error.
-            # For now, we assume reasonable output size.
-
             full_out = "".join(self.output_buffer)
             full_err = "".join(self.error_buffer)
-            
-            # Check if there is anything new to update compared to last flush?
-            # Actually, we always overwrite 'output' field with full content so far.
-            # If we want to reduce writes, we could check if buffers changed length.
-            # But here we just check if we have content.
             
             if full_out or full_err:
                 updates['output'] = full_out
@@ -306,20 +274,15 @@ class CommandExecutor(threading.Thread):
                     self.last_flush = current_time
                 except Exception as e:
                     print(f"[{self.cmd_id}] Error flushing: {e}")
-                    # If document is too big, maybe we should truncate?
                     if "Resource exhausted" in str(e) or "Document too large" in str(e):
                         self.cmd_ref.update({
                             'error': full_err + "\n[Output truncated due to size limit]",
-                            'status': 'completed' # Stop to prevent infinite loop of errors
+                            'status': 'completed'
                         })
                         self.should_stop = True
 
     def on_doc_update(self, col_snapshot, changes, read_time):
         try:
-            # The first argument is the snapshot(s).
-            # If it's a list (QuerySnapshot), iterate.
-            # If it's a DocumentSnapshot, use it.
-            
             docs = []
             if hasattr(col_snapshot, '__iter__'):
                 docs = list(col_snapshot)
@@ -344,99 +307,56 @@ class Agent:
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
         
-        # Default configuration (can be updated from Firestore)
-        self.polling_rate = 10 # Active heartbeat interval
-        self.sleep_polling_rate = 60 # Sleep heartbeat interval
+        self.polling_rate = 10
+        self.sleep_polling_rate = 60
         self.idle_timeout = IDLE_TIMEOUT
 
-        # Listen for configuration changes
         self.doc_ref.on_snapshot(self.on_device_update)
 
     def on_device_update(self, doc_snapshot, changes, read_time):
-        if len(doc_snapshot) == 1: # Single doc snapshot is a list in python SDK? No, just checking
-           # Wait, on_snapshot for document returns a list of size 1 usually if used on query, 
-           # but for document ref it returns the snapshot directly in some SDKs, or list of changes.
-           # In python admin SDK on_snapshot takes callback(col_snapshot, changes, read_time).
-           pass
-
-        # For document listen:
         for change in changes:
              if change.type.name == 'MODIFIED':
                  data = change.document.to_dict()
                  if data:
-                     # Update config
                      if 'polling_rate' in data:
                          self.polling_rate = data['polling_rate']
                      if 'sleep_polling_rate' in data:
                          self.sleep_polling_rate = data['sleep_polling_rate']
                      print(f"Config updated: Active={self.polling_rate}s, Sleep={self.sleep_polling_rate}s")
 
-    def get_git_info(self):
-        """Collect git status information."""
+    def fetch_agent_info(self):
+        """Fetches data from the local API."""
         try:
-            repo_path = os.path.dirname(os.path.abspath(__file__))
-            
-            def run_git(args):
-                return subprocess.check_output(['git'] + args, cwd=repo_path, text=True, stderr=subprocess.DEVNULL).strip()
-            
-            subprocess.check_call(['git', 'rev-parse', '--is-inside-work-tree'], cwd=repo_path, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-
-            branch = run_git(['rev-parse', '--abbrev-ref', 'HEAD'])
-            commit = run_git(['rev-parse', '--short', 'HEAD'])
-            status = run_git(['status', '--porcelain'])
-            is_dirty = bool(status)
-            last_commit_date = run_git(['log', '-1', '--format=%cd', '--date=iso'])
-            
-            return {
-                'branch': branch,
-                'commit': commit,
-                'is_dirty': is_dirty,
-                'last_commit_date': last_commit_date
-            }
-        except Exception:
-            return None
+            response = requests.get(f"{API_URL}/status", timeout=5)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            print(f"Error fetching data from API: {e}")
+        return {}
 
     def register(self):
         try:
-            self.doc_ref.set({
-                'hostname': platform.node(),
-                'platform': platform.system(),
-                'release': platform.release(),
-                'version': platform.version(),
+            info = self.fetch_agent_info()
+            
+            data = {
+                'hostname': info.get('hostname', platform.node()),
+                'platform': info.get('platform', platform.system()),
+                'release': info.get('release', platform.release()),
+                'version': info.get('version', platform.version()),
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'status': 'online',
-                'ip': self.get_ip_address(),
-                'stats': self.collect_stats(),
-                'git': self.get_git_info(),
-                # Set default config if missing
+                'ip': info.get('ip', '127.0.0.1'),
+                'stats': info.get('stats', {}),
+                'git': info.get('git', {}),
                 'polling_rate': 10,
-                'sleep_polling_rate': 60
-            }, merge=True)
+                'sleep_polling_rate': 60,
+                'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
+            }
+            
+            self.doc_ref.set(data, merge=True)
             print(f"Device {self.device_id} registered.")
         except Exception as e:
             print(f"Error registering device: {e}")
-
-    def collect_stats(self):
-        try:
-            return {
-                'cpu_percent': psutil.cpu_percent(interval=None),
-                'memory_percent': psutil.virtual_memory().percent,
-                'disk_percent': psutil.disk_usage('/').percent,
-                'boot_time': psutil.boot_time()
-            }
-        except Exception as e:
-            return {}
-
-    def get_ip_address(self):
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except:
-            return "127.0.0.1"
 
     def start_watching(self):
         if not self.watch:
@@ -460,15 +380,14 @@ class Agent:
 
     def send_heartbeat(self):
         try:
-            stats = self.collect_stats()
-            git_info = self.get_git_info()
+            info = self.fetch_agent_info()
             update_data = {
                 'last_seen': firestore.SERVER_TIMESTAMP,
-                'stats': stats,
+                'stats': info.get('stats', {}),
                 'mode': 'active' if self.watch else 'sleep'
             }
-            if git_info:
-                update_data['git'] = git_info
+            if info.get('git'):
+                update_data['git'] = info.get('git')
                 
             self.doc_ref.update(update_data)
         except Exception as e:
@@ -482,27 +401,25 @@ class Agent:
         while self.running:
             current_time = time.time()
             
-            # Clean up finished threads
             finished_ids = [cmd_id for cmd_id, thread in self.active_commands.items() if not thread.is_alive()]
             for cmd_id in finished_ids:
                 print(f"Command {cmd_id} finished.")
                 del self.active_commands[cmd_id]
 
-            # Determine activity
             is_busy = len(self.active_commands) > 0
             if is_busy:
                 self.last_activity_time = current_time
 
             idle_time = current_time - self.last_activity_time
             
-            if self.watch: # Active Mode
+            if self.watch: 
                 if idle_time > self.idle_timeout and not is_busy:
                     print(f"No activity for {self.idle_timeout}s. Entering sleep mode...")
                     self.stop_watching()
                 else:
                     self.send_heartbeat()
                     time.sleep(self.polling_rate)
-            else: # Sleep Mode
+            else: 
                 if self.has_pending_commands():
                     print("Activity detected via poll. Waking up...")
                     self.last_activity_time = time.time()
@@ -511,7 +428,6 @@ class Agent:
                     self.send_heartbeat()
                     time.sleep(self.sleep_polling_rate)
         
-        # Cleanup
         self.file_syncer.stop()
         self.file_syncer.join()
 
@@ -535,6 +451,15 @@ class Agent:
 
 if __name__ == "__main__":
     print("Starting DontPortForward Agent...")
+    
+    # Start API in a separate thread
+    api_thread = threading.Thread(target=start_api)
+    api_thread.daemon = True
+    api_thread.start()
+    
+    # Give API a moment to start
+    time.sleep(2)
+    
     agent = Agent(DEVICE_ID)
     agent.register()
     agent.listen_for_commands()

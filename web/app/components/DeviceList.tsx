@@ -15,12 +15,14 @@ interface Device {
     cpu_percent: number;
     memory_percent: number;
   };
+  allowed_emails?: string[];
 }
 
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;
   selectedDeviceId?: string;
   className?: string;
+  currentUserEmail?: string | null;
 }
 
 const WindowsIcon = () => (
@@ -49,7 +51,7 @@ const DefaultIcon = () => (
    </svg>
 );
 
-export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "" }: DeviceListProps) {
+export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "", currentUserEmail }: DeviceListProps) {
   const [devices, setDevices] = useState<Device[]>([]);
 
   useEffect(() => {
@@ -62,13 +64,20 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
         id: doc.id,
         ...doc.data()
       } as Device));
-      setDevices(deviceList);
+      
+      const filteredDevices = deviceList.filter(device => {
+        if (!device.allowed_emails || device.allowed_emails.length === 0) return true;
+        if (!currentUserEmail) return false;
+        return device.allowed_emails.includes(currentUserEmail);
+      });
+
+      setDevices(filteredDevices);
     }, (error) => {
         console.error("Error fetching devices:", error);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [currentUserEmail]);
 
   const getIcon = (platform?: string) => {
     if (!platform) return <DefaultIcon />;

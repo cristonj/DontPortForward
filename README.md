@@ -8,6 +8,16 @@
 
 DontPortForward allows you to control remote computers via a web console without port forwarding, using Firebase Firestore as a relay.
 
+Traditional remote access often requires configuring router port forwarding, which exposes your network to the internet and can be blocked by ISPs.
+
+**DontPortForward** solves these common problems:
+- **Bypasses CGNAT (Carrier-Grade NAT)**: Works even if your ISP assigns a private IP address (common with Starlink, LTE/5G, and some residential providers).
+- **No Port Forwarding Required**: Since the agent initiates an outbound connection to Firebase, you don't need to open any inbound ports on your router.
+- **Firewall Friendly**: Works behind strict corporate or university firewalls that block incoming connections.
+- **Secure**: Uses Firebase authentication and encrypted communication; your device isn't directly exposed to the public internet.
+- **Cross-Platform**: The agent runs on both **Windows** and **Linux**.
+- **Universal Access**: Control your devices and share files from any web browser via the PWA interface (installable on mobile and desktop).
+
 ## 📂 Project Structure
 
 - **`web/`**: Next.js 13+ application with Tailwind CSS. This is the client interface.
