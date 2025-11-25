@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List, Any
 import psutil
 import platform
 import subprocess
 import os
 import socket
+import glob
 
 app = FastAPI()
 
@@ -15,6 +18,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class CommandRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+
+class FileReadRequest(BaseModel):
+    path: str
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
 
 def get_ip_address():
     """
@@ -87,3 +101,96 @@ def get_status():
 def health():
     return {"status": "ok"}
 
+@app.post("/exec")
+def execute_command(request: CommandRequest):
+    try:
+        result = subprocess.run(
+            request.command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=request.cwd or os.getcwd()
+        )
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/files/list")
+def list_files(path: str = "."):
+    try:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="Path not found")
+        
+        files = []
+        for item in os.listdir(abs_path):
+            item_path = os.path.join(abs_path, item)
+            try:
+                stat = os.stat(item_path)
+                files.append({
+                    "name": item,
+                    "is_dir": os.path.isdir(item_path),
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime
+                })
+            except OSError:
+                continue
+        return {"files": files, "path": abs_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/files/read")
+def read_file(request: FileReadRequest):
+    try:
+        abs_path = os.path.abspath(request.path)
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        if not os.path.isfile(abs_path):
+             raise HTTPException(status_code=400, detail="Not a file")
+             
+        with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        return {"content": content, "path": abs_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/files/write")
+def write_file(request: FileWriteRequest):
+    try:
+        abs_path = os.path.abspath(request.path)
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        
+        with open(abs_path, 'w', encoding='utf-8') as f:
+            f.write(request.content)
+        return {"status": "success", "path": abs_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/processes")
+def list_processes():
+    try:
+        procs = []
+        for proc in psutil.process_iter(['pid', 'name', 'username', 'status', 'cpu_percent', 'memory_percent']):
+            try:
+                procs.append(proc.info)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return {"processes": procs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/processes/{pid}")
+def kill_process(pid: int):
+    try:
+        proc = psutil.Process(pid)
+        proc.kill()
+        return {"status": "success", "pid": pid}
+    except psutil.NoSuchProcess:
+        raise HTTPException(status_code=404, detail="Process not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
