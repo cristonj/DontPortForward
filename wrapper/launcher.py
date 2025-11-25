@@ -73,23 +73,26 @@ def main():
     print(f"Project root: {root_dir}")
     
     agent_process = run_agent(root_dir)
+    last_update_check = time.time()
     
     while True:
         try:
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(1)
             
             # Check for updates
-            if git_pull(root_dir):
-                print("Code updated. Restarting agent...")
-                if agent_process and agent_process.poll() is None:
-                    agent_process.terminate()
-                    try:
-                        agent_process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        agent_process.kill()
-                
-                # Restart launcher to load new launcher code if changed
-                restart_program()
+            if time.time() - last_update_check > CHECK_INTERVAL:
+                last_update_check = time.time()
+                if git_pull(root_dir):
+                    print("Code updated. Restarting agent...")
+                    if agent_process and agent_process.poll() is None:
+                        agent_process.terminate()
+                        try:
+                            agent_process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            agent_process.kill()
+                    
+                    # Restart launcher to load new launcher code if changed
+                    restart_program()
 
             # Check if agent is still running
             if agent_process is None or agent_process.poll() is not None:
