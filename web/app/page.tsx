@@ -18,6 +18,7 @@ import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User 
 import DeviceList from "./components/DeviceList";
 import DeviceStatus from "./components/DeviceStatus";
 import SharedFolder from "./components/SharedFolder";
+import ApiExplorer from "./components/ApiExplorer";
 
 interface CommandLog {
   id: string;
@@ -53,7 +54,7 @@ export default function Home() {
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [inputCommand, setInputCommand] = useState("");
   const [logs, setLogs] = useState<CommandLog[]>([]);
-  const [viewMode, setViewMode] = useState<'console' | 'status' | 'files'>('console');
+  const [viewMode, setViewMode] = useState<'console' | 'status' | 'files' | 'api'>('console');
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -387,6 +388,16 @@ export default function Home() {
                                 Files
                             </button>
                             <button 
+                                onClick={() => setViewMode('api')} 
+                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                                    viewMode === 'api' 
+                                    ? 'bg-gray-700 text-white shadow-sm' 
+                                    : 'text-gray-400 hover:text-gray-300'
+                                }`}
+                            >
+                                API
+                            </button>
+                            <button 
                                 onClick={() => setViewMode('status')} 
                                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                                     viewMode === 'status' 
@@ -609,6 +620,8 @@ export default function Home() {
                 deviceId={selectedDeviceId} 
                 onRunCommand={(cmd) => sendCommand(undefined, cmd)}
               />
+          ) : viewMode === 'api' ? (
+              <ApiExplorer deviceId={selectedDeviceId} />
           ) : (
               <DeviceStatus deviceId={selectedDeviceId} />
           )}

@@ -73,28 +73,46 @@ def main():
     print(f"Project root: {root_dir}")
     
     agent_process = run_agent(root_dir)
+    last_update_check = time.time()
     
     while True:
         try:
-            time.sleep(CHECK_INTERVAL)
+            # Calculate time to next update check
+            time_since_check = time.time() - last_update_check
+            wait_time = max(1, CHECK_INTERVAL - time_since_check)
+
+            if agent_process:
+                try:
+                    # efficient blocking wait: returns immediately if agent exits, 
+                    # otherwise waits up to wait_time
+                    agent_process.wait(timeout=wait_time)
+                    
+                    # If we get here, the agent has exited
+                    print(f"Agent exited (code {agent_process.returncode}). Restarting...")
+                    agent_process = run_agent(root_dir)
+                except subprocess.TimeoutExpired:
+                    # Timeout reached, meaning agent is still running.
+                    pass
+            else:
+                # No agent process (failed to start?), sleep briefly and retry
+                time.sleep(5)
+                agent_process = run_agent(root_dir)
             
             # Check for updates
-            if git_pull(root_dir):
-                print("Code updated. Restarting agent...")
-                if agent_process and agent_process.poll() is None:
-                    agent_process.terminate()
-                    try:
-                        agent_process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        agent_process.kill()
+            if time.time() - last_update_check > CHECK_INTERVAL:
+                last_update_check = time.time()
                 
-                # Restart launcher to load new launcher code if changed
-                restart_program()
-
-            # Check if agent is still running
-            if agent_process is None or agent_process.poll() is not None:
-                print(f"Agent not running. Restarting...")
-                agent_process = run_agent(root_dir)
+                if git_pull(root_dir):
+                    print("Code updated. Restarting agent...")
+                    if agent_process and agent_process.poll() is None:
+                        agent_process.terminate()
+                        try:
+                            agent_process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            agent_process.kill()
+                    
+                    # Restart launcher to load new launcher code if changed
+                    restart_program()
 
             # Check for system reboot
             if should_reboot():
