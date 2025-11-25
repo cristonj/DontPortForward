@@ -28,10 +28,94 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   const [response, setResponse] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [snippetLang, setSnippetLang] = useState<'python' | 'js'>('python');
 
   useEffect(() => {
     setRequestBody(selectedEndpoint.defaultBody || "");
   }, [selectedEndpoint]);
+
+  const getSnippet = () => {
+    let bodyObj = {};
+    try {
+        if (requestBody) bodyObj = JSON.parse(requestBody);
+    } catch (e) {}
+    
+    if (snippetLang === 'python') {
+        const pythonBody = JSON.stringify(bodyObj, null, 4)
+            .replace(/true/g, 'True')
+            .replace(/false/g, 'False')
+            .replace(/null/g, 'None');
+
+        return `import firebase_admin
+from firebase_admin import credentials, firestore
+import time
+
+# Initialize (if not already done)
+if not firebase_admin._apps:
+    cred = credentials.Certificate('path/to/serviceAccountKey.json')
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+device_id = "${deviceId}"
+
+command = {
+    'type': 'api',
+    'endpoint': '${selectedEndpoint.path}',
+    'method': '${selectedEndpoint.method}',
+    'body': ${pythonBody}, 
+    'status': 'pending',
+    'created_at': firestore.SERVER_TIMESTAMP
+}
+
+_, doc_ref = db.collection('devices').document(device_id).collection('commands').add(command)
+print(f"Command sent: {doc_ref.id}")
+
+# Poll for result
+while True:
+    doc = doc_ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        if data.get('status') == 'completed':
+            print("Output:", data.get('output'))
+            break
+        elif data.get('status') == 'cancelled':
+            print("Cancelled")
+            break
+    time.sleep(1)`;
+    } else {
+        const jsBody = JSON.stringify(bodyObj, null, 2).replace(/\n/g, '\n  ');
+        return `// Using Firebase JS SDK
+import { db } from "./firebase-config";
+import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
+
+const deviceId = "${deviceId}";
+
+const command = {
+  type: 'api',
+  endpoint: '${selectedEndpoint.path}',
+  method: '${selectedEndpoint.method}',
+  body: ${jsBody},
+  status: 'pending',
+  created_at: serverTimestamp()
+};
+
+// Send command
+const docRef = await addDoc(collection(db, "devices", deviceId, "commands"), command);
+console.log("Command sent:", docRef.id);
+
+// Listen for result
+const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (snap) => {
+  const data = snap.data();
+  if (data?.status === 'completed') {
+    console.log("Response:", data.output);
+    unsub();
+  } else if (data?.status === 'cancelled') {
+    console.log("Cancelled");
+    unsub();
+  }
+});`;
+    }
+  };
 
   const handleExecute = async () => {
     if (!deviceId) return;
@@ -193,6 +277,36 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
                             {response}
                         </pre>
                     )}
+                </div>
+            </div>
+
+            {/* Integration Snippet */}
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden flex flex-col shrink-0">
+                <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900/80">
+                    <span className="font-bold text-sm text-gray-400 uppercase tracking-wider">Access in your app</span>
+                    <div className="flex bg-black rounded-lg p-0.5 border border-gray-800">
+                        <button
+                            onClick={() => setSnippetLang('python')}
+                            className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${
+                                snippetLang === 'python' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'
+                            }`}
+                        >
+                            PYTHON
+                        </button>
+                        <button
+                            onClick={() => setSnippetLang('js')}
+                            className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${
+                                snippetLang === 'js' ? 'bg-gray-800 text-yellow-400' : 'text-gray-500 hover:text-gray-300'
+                            }`}
+                        >
+                            JAVASCRIPT
+                        </button>
+                    </div>
+                </div>
+                <div className="p-4 bg-black overflow-x-auto max-h-60 scrollbar-thin scrollbar-thumb-gray-800">
+                    <pre className="text-[10px] sm:text-xs text-gray-300 font-mono whitespace-pre selection:bg-gray-700 selection:text-white">
+                        {getSnippet()}
+                    </pre>
                 </div>
             </div>
         </div>

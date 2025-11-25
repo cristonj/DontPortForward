@@ -128,12 +128,24 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
                     <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight break-all">
                         {device.hostname || device.id}
                     </h2>
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border shrink-0 ${
-                        device.status === 'online' 
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border shrink-0 flex items-center gap-1.5 ${
+                        device.mode === 'sleep'
+                        ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                        : device.status === 'online' 
                         ? 'bg-green-500/10 text-green-400 border-green-500/20 shadow-[0_0_10px_rgba(34,197,94,0.1)]' 
                         : 'bg-red-500/10 text-red-400 border-red-500/20'
                     }`}>
-                        {device.status?.toUpperCase() || 'UNKNOWN'}
+                        {device.mode === 'sleep' ? (
+                            <>
+                                <span className="relative flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                </span>
+                                ASLEEP
+                            </>
+                        ) : (
+                            device.status?.toUpperCase() || 'UNKNOWN'
+                        )}
                     </span>
                 </div>
                 <div className="text-gray-500 text-xs mt-1.5 font-mono break-all">{device.id}</div>
