@@ -13,7 +13,8 @@ import {
   doc,
   updateDoc,
   writeBatch,
-  deleteDoc
+  deleteDoc,
+  getDocs
 } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import dynamic from 'next/dynamic';
@@ -67,6 +68,7 @@ export default function Home() {
   const [inputCommand, setInputCommand] = useState("");
   const [logs, setLogs] = useState<CommandLog[]>([]);
   const [viewMode, setViewMode] = useState<'console' | 'status' | 'files' | 'api'>('console');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -125,9 +127,13 @@ export default function Home() {
       setIsSidebarOpen(false); // Close sidebar on selection on mobile
   };
 
-  // Listen for logs of the selected device
+  // Listen for logs of the selected device - ONLY when console view is active
   useEffect(() => {
-    if (!selectedDeviceId || !user) {
+    if (!selectedDeviceId || !user || viewMode !== 'console') {
+        if (viewMode !== 'console') {
+          // Keep existing logs when switching away from console
+          return;
+        }
         setLogs([]);
         return;
     }
@@ -152,7 +158,7 @@ export default function Home() {
     });
 
     return () => unsubscribe();
-  }, [selectedDeviceId, user]);
+  }, [selectedDeviceId, user, viewMode]);
 
   // Handle Input Change & Autocomplete
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -281,6 +287,35 @@ export default function Home() {
         }
         return next;
     });
+  };
+
+  const manualRefresh = async () => {
+    if (!selectedDeviceId || !user) return;
+    setIsRefreshing(true);
+    
+    try {
+      const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
+      const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
+      const snapshot = await getDocs(q);
+      
+      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as CommandLog));
+      setLogs(newLogs);
+    } catch (error) {
+      console.error("Error refreshing logs:", error);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
+
+  // Helper function to get last N lines of text
+  const getLastLines = (text: string | undefined, maxLines: number = 50): string => {
+    if (!text) return '';
+    const lines = text.split('\n');
+    if (lines.length <= maxLines) return text;
+    return lines.slice(-maxLines).join('\n');
   };
 
   const handleLogin = async () => {
@@ -480,7 +515,35 @@ export default function Home() {
           {viewMode === 'console' ? (
               <>
                 {/* Terminal Output */}
-                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm">
+                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
+                    {/* Manual Refresh Button and Status */}
+                    {selectedDeviceId && (
+                        <div className="fixed top-20 right-4 z-30 flex flex-col gap-2 items-end">
+                            <button
+                                onClick={manualRefresh}
+                                disabled={isRefreshing}
+                                className="bg-gray-800/90 hover:bg-gray-700 backdrop-blur-sm border border-gray-700 text-gray-300 px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium disabled:opacity-50"
+                                title="Manually refresh terminal"
+                            >
+                                <svg 
+                                    className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} 
+                                    fill="none" 
+                                    stroke="currentColor" 
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                            </button>
+                            <div className="bg-gray-800/90 backdrop-blur-sm border border-gray-700 px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-2 text-[10px]">
+                                <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                </span>
+                                <span className="text-gray-400 uppercase tracking-wider">Live Updates</span>
+                            </div>
+                        </div>
+                    )}
                     {!selectedDeviceId && (
                         <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
                             <div className="w-12 h-12 border-2 border-gray-700 rounded-lg flex items-center justify-center">
@@ -498,39 +561,90 @@ export default function Home() {
                     
                     {/* Running Processes Section */}
                     {selectedDeviceId && runningLogs.length > 0 && (
-                        <div className="space-y-3">
-                            <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold mb-2 flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                                Active Processes ({runningLogs.length})
-                            </h3>
+                        <div className="space-y-3 pb-2">
+                            <div className="sticky top-0 bg-gray-950/95 backdrop-blur-sm z-10 py-2 -mt-2 border-b border-blue-500/20">
+                                <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold flex items-center gap-2">
+                                    <span className="relative flex h-3 w-3">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                                    </span>
+                                    Active Processes ({runningLogs.length})
+                                    <span className="ml-auto text-[10px] text-blue-400/50 normal-case tracking-normal">Real-time updates</span>
+                                </h3>
+                            </div>
                             <div className="grid grid-cols-1 gap-3">
                                 {runningLogs.map(log => (
-                                    <div key={log.id} className="bg-gray-900/40 border border-blue-500/30 rounded-lg p-4 shadow-lg backdrop-blur-sm relative group overflow-hidden">
-                                        <div className="flex justify-between items-start mb-2 relative z-10">
-                                            <div className="flex flex-col">
-                                                <div className="font-bold text-white text-base">{log.command}</div>
-                                                <div className="text-xs text-blue-300/70 mt-0.5 font-mono">
-                                                    ID: {log.id.substring(0, 8)} • {log.status}
+                                    <div key={log.id} className="bg-gradient-to-br from-gray-900/60 to-gray-900/40 border border-blue-500/30 rounded-lg p-4 shadow-xl backdrop-blur-sm relative group overflow-hidden">
+                                        {/* Animated border effect */}
+                                        <div className="absolute inset-0 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-500/0 via-blue-500/10 to-blue-500/0"></div>
+                                        </div>
+                                        
+                                        <div className="flex justify-between items-start mb-3 relative z-10">
+                                            <div className="flex flex-col flex-1 min-w-0">
+                                                <div className="font-bold text-white text-base mb-1 break-all">{log.command}</div>
+                                                <div className="text-xs text-blue-300/70 font-mono flex items-center gap-2 flex-wrap">
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+                                                        </svg>
+                                                        {log.id.substring(0, 8)}
+                                                    </span>
+                                                    <span>•</span>
+                                                    <span className="uppercase">{log.status}</span>
                                                 </div>
                                             </div>
                                             <button 
                                                 onClick={() => killCommand(log.id)}
-                                                className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/20 transition-colors flex items-center gap-1"
+                                                className="ml-3 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
                                             >
-                                                <span className="w-2 h-2 bg-red-500 rounded-sm"></span>
-                                                Stop
+                                                <span className="w-2 h-2 bg-red-500 rounded-sm animate-pulse"></span>
+                                                Kill
                                             </button>
                                         </div>
                                         
-                                        {/* Output Preview for Active Process */}
-                                        <div className="bg-black/50 rounded p-2 font-mono text-xs text-gray-300 h-32 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 border border-gray-800/50">
+                                        {/* Output Preview for Active Process - Last 50 lines */}
+                                        <div className="bg-black/50 rounded p-3 font-mono text-xs text-gray-300 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 border border-gray-800/50">
                                             {(log.output || log.error) ? (
-                                                <pre className="whitespace-pre-wrap break-all">
-                                                    {log.output}
-                                                    {log.error && <span className="text-red-400">{log.error}</span>}
-                                                </pre>
+                                                <div className="space-y-1">
+                                                    {log.output && (
+                                                        <div>
+                                                            <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
+                                                                Output (Last 50 lines)
+                                                            </div>
+                                                            <pre className="whitespace-pre-wrap break-all leading-relaxed">
+                                                                {getLastLines(log.output, 50).split('\n').map((line, idx, arr) => (
+                                                                    <div key={idx} className="hover:bg-gray-800/30">
+                                                                        <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
+                                                                            {arr.length - 50 + idx + 1 > 0 ? arr.length - 50 + idx + 1 : idx + 1}
+                                                                        </span>
+                                                                        <span>{line || ' '}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </pre>
+                                                        </div>
+                                                    )}
+                                                    {log.error && (
+                                                        <div className="mt-2">
+                                                            <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
+                                                            <pre className="whitespace-pre-wrap break-all text-red-400/80 leading-relaxed">
+                                                                {getLastLines(log.error, 50).split('\n').map((line, idx) => (
+                                                                    <div key={idx} className="hover:bg-red-900/10">
+                                                                        <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">{idx + 1}</span>
+                                                                        <span>{line || ' '}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </pre>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             ) : (
-                                                <span className="text-gray-600 italic">Waiting for output...</span>
+                                                <div className="flex items-center justify-center h-32">
+                                                    <div className="text-center">
+                                                        <div className="inline-block w-3 h-3 bg-blue-500 rounded-full animate-pulse mb-2"></div>
+                                                        <div className="text-gray-500 italic text-xs">Waiting for output...</div>
+                                                    </div>
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -595,18 +709,55 @@ export default function Home() {
                                                 </div>
                                                 {/* Output preview or full view */}
                                                 {(log.output || log.error) && (
-                                                    <div className={`mt-2 font-mono text-gray-500 ${
+                                                    <div className={`mt-2 font-mono ${
                                                         isExpanded 
-                                                        ? 'text-xs whitespace-pre-wrap break-all bg-black/30 p-2 rounded border border-gray-800/50' 
-                                                        : 'text-xs line-clamp-2 pl-2 border-l-2 border-gray-800'
+                                                        ? 'text-xs bg-black/30 p-3 rounded border border-gray-800/50 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700' 
+                                                        : 'text-xs line-clamp-2 pl-2 border-l-2 border-gray-800 text-gray-500'
                                                     }`}>
-                                                        {log.output && (
-                                                            <span>{isExpanded ? log.output : log.output.substring(0, 150)}</span>
-                                                        )}
-                                                        {log.error && (
-                                                            <span className="text-red-500/70 block mt-1">
-                                                                {isExpanded ? log.error : log.error.substring(0, 150)}
-                                                            </span>
+                                                        {isExpanded ? (
+                                                            <div className="space-y-2">
+                                                                {log.output && (
+                                                                    <div>
+                                                                        <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
+                                                                            Output (Last 50 lines)
+                                                                        </div>
+                                                                        <pre className="whitespace-pre-wrap break-all text-gray-300 leading-relaxed">
+                                                                            {getLastLines(log.output, 50).split('\n').map((line, idx, arr) => (
+                                                                                <div key={idx} className="hover:bg-gray-800/30">
+                                                                                    <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
+                                                                                        {arr.length - 50 + idx + 1 > 0 ? arr.length - 50 + idx + 1 : idx + 1}
+                                                                                    </span>
+                                                                                    <span>{line || ' '}</span>
+                                                                                </div>
+                                                                            ))}
+                                                                        </pre>
+                                                                    </div>
+                                                                )}
+                                                                {log.error && (
+                                                                    <div>
+                                                                        <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
+                                                                        <pre className="whitespace-pre-wrap break-all text-red-400/80 leading-relaxed">
+                                                                            {getLastLines(log.error, 50).split('\n').map((line, idx) => (
+                                                                                <div key={idx} className="hover:bg-red-900/10">
+                                                                                    <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">{idx + 1}</span>
+                                                                                    <span>{line || ' '}</span>
+                                                                                </div>
+                                                                            ))}
+                                                                        </pre>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <>
+                                                                {log.output && (
+                                                                    <span>{log.output.substring(0, 150)}</span>
+                                                                )}
+                                                                {log.error && (
+                                                                    <span className="text-red-500/70 block mt-1">
+                                                                        {log.error.substring(0, 150)}
+                                                                    </span>
+                                                                )}
+                                                            </>
                                                         )}
                                                     </div>
                                                 )}
