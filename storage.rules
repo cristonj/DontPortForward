@@ -1,0 +1,26 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Check if user is allowed based on device whitelist
+    function isAllowed(deviceId) {
+      // Use firestore.get to retrieve the device document
+      // Note: We assume the default database.
+      let deviceDoc = firestore.get(/databases/(default)/documents/devices/$(deviceId));
+      
+      // If doc exists, check whitelist. If not, allow (or deny based on policy).
+      // Here we follow the same logic: open if no whitelist or no doc.
+      return request.auth != null && 
+             (deviceDoc == null || 
+              !('allowed_emails' in deviceDoc.data) ||
+              deviceDoc.data.allowed_emails == null || 
+              deviceDoc.data.allowed_emails.size() == 0 || 
+              request.auth.token.email in deviceDoc.data.allowed_emails
+             );
+    }
+
+    match /agents/{deviceId}/shared/{allPaths=**} {
+      allow read, write, delete: if isAllowed(deviceId);
+    }
+  }
+}

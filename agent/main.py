@@ -14,6 +14,10 @@ import uvicorn
 from dotenv import load_dotenv
 from pathlib import Path
 import warnings
+try:
+    from api import app as api_app
+except ImportError:
+    from agent.api import app as api_app
 
 # Suppress google-crc32c warning (no C extension on Windows Python 3.14)
 warnings.filterwarnings("ignore", message="As the c extension couldn't be imported")
@@ -65,16 +69,9 @@ except Exception as e:
 
 def start_api():
     """Starts the FastAPI server."""
-    # We use agent.api if running from root, or just api if running from agent dir?
-    # uvicorn expects import string.
-    # Assuming running from root: uvicorn agent.api:app
-    # If running from agent dir: uvicorn api:app
-    # Let's try to detect or just assume standard running 'python agent/main.py' from root.
-    # If running as 'python agent/main.py', sys.path[0] is agent/.
-    
-    # We will run uvicorn programmatically.
     try:
-        uvicorn.run("agent.api:app", host="0.0.0.0", port=8000, log_level="error", reload=False)
+        # Run the app instance directly to avoid import path issues
+        uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="error", reload=False)
     except Exception as e:
         print(f"Failed to start API server: {e}")
 

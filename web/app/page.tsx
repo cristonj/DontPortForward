@@ -89,7 +89,7 @@ export default function Home() {
 
   // Listen for logs of the selected device
   useEffect(() => {
-    if (!selectedDeviceId) {
+    if (!selectedDeviceId || !user) {
         setLogs([]);
         return;
     }
@@ -105,11 +105,16 @@ export default function Home() {
       } as CommandLog));
       setLogs(newLogs);
     }, (error) => {
-      console.error("Error fetching logs:", error);
+      if (error.code === 'permission-denied') {
+          // Permissions might be lost during logout, ignore safely
+          console.debug("Logs permission denied (possibly logged out)");
+      } else {
+          console.error("Error fetching logs:", error);
+      }
     });
 
     return () => unsubscribe();
-  }, [selectedDeviceId]);
+  }, [selectedDeviceId, user]);
 
   // Handle Input Change & Autocomplete
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -302,7 +307,12 @@ export default function Home() {
              <div className="p-4 border-t border-gray-800 bg-gray-900/50">
                  <div className="flex items-center gap-3 mb-2">
                      {user.photoURL && (
-                         <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full" />
+                         <img 
+                           src={user.photoURL} 
+                           alt="User" 
+                           className="w-8 h-8 rounded-full" 
+                           referrerPolicy="no-referrer"
+                         />
                      )}
                      <div className="flex-1 min-w-0">
                          <div className="text-sm font-medium text-white truncate">{user.displayName}</div>

@@ -1,92 +1,62 @@
 # DontPortForward
 
-**Universal remote access solution that works when traditional methods fail.**
+Remote device management using Firebase as a relay. No port forwarding required.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Components
 
-## 🚀 Overview
+1.  **Agent**: Runs on the target device (Linux, Windows, macOS). Polls Firestore for commands, pushes status, and syncs files.
+2.  **Web Console**: Next.js app to view devices, send commands, and manage files.
 
-DontPortForward allows you to control remote computers via a web console without port forwarding, using Firebase Firestore as a relay.
-
-Traditional remote access often requires configuring router port forwarding, which exposes your network to the internet and can be blocked by ISPs.
-
-**DontPortForward** solves these common problems:
-- **Bypasses CGNAT (Carrier-Grade NAT)**: Works even if your ISP assigns a private IP address (common with Starlink, LTE/5G, and some residential providers).
-- **No Port Forwarding Required**: Since the agent initiates an outbound connection to Firebase, you don't need to open any inbound ports on your router.
-- **Firewall Friendly**: Works behind strict corporate or university firewalls that block incoming connections.
-- **Secure**: Uses Firebase authentication and encrypted communication; your device isn't directly exposed to the public internet.
-- **Cross-Platform**: The agent runs on both **Windows** and **Linux**.
-- **Universal Access**: Control your devices and share files from any web browser via the PWA interface (installable on mobile and desktop).
-
-## 📂 Project Structure
-
-- **`web/`**: Next.js 13+ application with Tailwind CSS. This is the client interface.
-- **`agent/`**: Python script (`main.py`) that runs on the target machine, executes commands, and reports back.
-- **`wrapper/`**: Python launcher (`launcher.py`) that manages the agent (auto-updates from git, reboots, restarts on crash).
-
-## 🛠 Setup
+## Setup Instructions
 
 ### 1. Firebase Setup
+1.  Create a Firebase project.
+2.  Enable **Firestore Database** and **Storage**.
+3.  Enable **Authentication** and add the **Google** provider.
+4.  Copy `firestore.rules` content to Firestore Rules in Firebase Console.
+5.  Copy `storage.rules` content to Storage Rules in Firebase Console.
+6.  Generate a Service Account Key (for the agent) and save as `agent/serviceAccountKey.json`.
+7.  Create a web app in Firebase project settings and get the config keys.
 
-1. Create a Firebase project at [console.firebase.google.com](https://console.firebase.google.com).
-2. Create a **Firestore Database** (start in Test Mode for development).
-3. **Web App**:
-   - Register a Web App in Firebase Project Settings.
-   - Copy the config keys.
-   - Create `web/.env.local`:
-     ```bash
-     NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
-     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
-     NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
-     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
-     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
-     NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
-     ```
-4. **Agent (Service Account)**:
-   - Go to Project Settings > Service Accounts.
-   - Generate a new private key (`serviceAccountKey.json`).
-   - Place this file in the `agent/` directory.
+### 2. Web App Setup
+1.  Navigate to `web/`.
+2.  Copy `.env.example` to `.env.local` (or create it) and fill in Firebase keys:
+    ```env
+    NEXT_PUBLIC_FIREBASE_API_KEY=...
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+    NEXT_PUBLIC_FIREBASE_APP_ID=...
+    ```
+3.  Install dependencies and run:
+    ```bash
+    npm install
+    npm run dev
+    ```
 
-### 2. Web Client
+### 3. Agent Setup
+1.  Navigate to `agent/`.
+2.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  (Optional) Set Environment Variables:
+    *   `DEVICE_ID`: Custom ID (defaults to hostname)
+    *   `ALLOWED_EMAILS`: Comma-separated list of emails allowed to access this agent.
+    *   `NEXT_PUBLIC_FIREBASE_PROJECT_ID` & `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`: Required if not loading from `web/.env`.
+4.  Run the agent:
+    ```bash
+    python main.py
+    ```
 
-```bash
-cd web
-npm install
-npm run dev
-```
-Open [http://localhost:3000](http://localhost:3000).
+## Usage
+*   Log in to the web console with Google.
+*   Select a device from the sidebar.
+*   **Terminal**: Run shell commands.
+*   **Files**: Upload/Download/Edit files in the shared folder.
+*   **Info**: View system stats (CPU, RAM, Git status).
 
-### 3. Agent (Target Machine)
-
-**Prerequisites**: Python 3.8+
-
-```bash
-# Install dependencies
-pip install -r agent/requirements.txt
-
-# Run the wrapper (recommended for production)
-python wrapper/launcher.py
-
-# OR Run the agent directly (for testing)
-cd agent
-python main.py
-```
-
-## 🖥 Usage
-
-1. Start the agent on your remote machine.
-2. Note the **Device ID** printed in the agent logs (defaults to hostname).
-3. Open the Web Console.
-4. Enter the **Device ID**.
-5. Type commands (e.g., `ls`, `whoami`, `uptime`) and hit Send.
-
-## 🔄 Updates & Maintenance
-
-The `wrapper/launcher.py` script automatically:
-- Checks this git repository for updates every minute.
-- Pulls changes and restarts the agent if updates are found.
-- Reboots the machine daily at 03:00 (configurable).
-
-## 📄 License
-
-MIT License
+## Architecture
+*   **Command Relay**: Web App writes to `devices/{id}/commands`. Agent listens, executes, and updates the document with output.
+*   **File Sync**: Web App uploads to `agents/{id}/shared/`. Agent polls/syncs this bucket path to its local `agent/shared/` folder.
