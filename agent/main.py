@@ -186,6 +186,33 @@ class CommandExecutor(threading.Thread):
                 os._exit(0)
                 return
 
+            if command_type == 'api':
+                endpoint = self.cmd_data.get('endpoint', '/health')
+                method = self.cmd_data.get('method', 'GET')
+                print(f"[{self.cmd_id}] API Request: {method} {endpoint}")
+                
+                try:
+                    url = f"{API_URL}{endpoint}"
+                    response = requests.request(method, url, timeout=5)
+                    try:
+                        output_data = json.dumps(response.json(), indent=2)
+                    except:
+                        output_data = response.text
+                        
+                    self.cmd_ref.update({
+                        'output': output_data,
+                        'status': 'completed',
+                        'return_code': response.status_code,
+                        'completed_at': firestore.SERVER_TIMESTAMP
+                    })
+                except Exception as e:
+                    self.cmd_ref.update({
+                        'error': str(e),
+                        'status': 'completed',
+                        'completed_at': firestore.SERVER_TIMESTAMP
+                    })
+                return
+
             if not command_str:
                 raise ValueError("No command string provided")
 
