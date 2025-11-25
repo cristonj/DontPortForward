@@ -199,11 +199,12 @@ class CommandExecutor(threading.Thread):
             if command_type == 'api':
                 endpoint = self.cmd_data.get('endpoint', '/health')
                 method = self.cmd_data.get('method', 'GET')
+                body = self.cmd_data.get('body', {})
                 print(f"[{self.cmd_id}] API Request: {method} {endpoint}")
                 
                 try:
                     url = f"{API_URL}{endpoint}"
-                    response = requests.request(method, url, timeout=5)
+                    response = requests.request(method, url, json=body, timeout=5)
                     try:
                         output_data = json.dumps(response.json(), indent=2)
                     except:
