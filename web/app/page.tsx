@@ -292,8 +292,17 @@ export default function Home() {
     }
   };
 
-  const deleteCommand = async (logId: string) => {
+  const deleteCommand = async (logId: string, isActive: boolean = false) => {
     if (!selectedDeviceId) return;
+    
+    const log = logs.find(l => l.id === logId);
+    const commandText = log?.command || 'this task';
+    const confirmMessage = isActive 
+      ? `Are you sure you want to delete the active task "${commandText}"? This will remove it from the history and may leave ghost processes running.`
+      : `Are you sure you want to delete "${commandText}"?`;
+    
+    if (!confirm(confirmMessage)) return;
+    
     try {
         await deleteDoc(doc(db, "devices", selectedDeviceId, "commands", logId));
     } catch (error) {
@@ -634,13 +643,25 @@ export default function Home() {
                                                     <span className="uppercase">{log.status}</span>
                                                 </div>
                                             </div>
-                                            <button 
-                                                onClick={() => killCommand(log.id)}
-                                                className="ml-3 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
-                                            >
-                                                <span className="w-2 h-2 bg-red-500 rounded-sm animate-pulse"></span>
-                                                Kill
-                                            </button>
+                                            <div className="ml-3 flex items-center gap-2">
+                                                <button 
+                                                    onClick={() => killCommand(log.id)}
+                                                    className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
+                                                >
+                                                    <span className="w-2 h-2 bg-red-500 rounded-sm animate-pulse"></span>
+                                                    Kill
+                                                </button>
+                                                <button 
+                                                    onClick={() => deleteCommand(log.id, true)}
+                                                    className="px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-600/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
+                                                    title="Delete task"
+                                                >
+                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                    Delete
+                                                </button>
+                                            </div>
                                         </div>
                                         
                                         {/* Output Preview for Active Process - Last 50 lines */}
@@ -714,7 +735,7 @@ export default function Home() {
                                     return (
                                     <SwipeToDeleteLogItem 
                                         key={log.id} 
-                                        onDelete={() => deleteCommand(log.id)}
+                                        onDelete={() => deleteCommand(log.id, false)}
                                         onClick={() => toggleLogExpansion(log.id)}
                                         isExpanded={isExpanded}
                                     >
