@@ -665,7 +665,7 @@ export default function Home() {
                                         </div>
                                         
                                         {/* Output Preview for Active Process - Last 50 lines */}
-                                        <div className="bg-black/50 rounded p-3 font-mono text-xs text-gray-300 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 border border-gray-800/50">
+                                        <div className="bg-black/50 rounded p-3 font-mono text-xs text-gray-300 max-h-96 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-600 hover:scrollbar-thumb-gray-500 scrollbar-track-gray-900/50 border border-gray-800/50" style={{ scrollBehavior: 'smooth' }}>
                                             {(log.output || log.error) ? (
                                                 <div className="space-y-1">
                                                     {log.output && (
@@ -772,9 +772,9 @@ export default function Home() {
                                                 {(log.output || log.error) && (
                                                     <div className={`mt-2 font-mono ${
                                                         isExpanded 
-                                                        ? 'text-xs bg-black/30 p-3 rounded border border-gray-800/50 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700' 
+                                                        ? 'text-xs bg-black/30 p-3 rounded border border-gray-800/50 max-h-96 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-600 hover:scrollbar-thumb-gray-500 scrollbar-track-gray-900/50' 
                                                         : 'text-xs line-clamp-2 pl-2 border-l-2 border-gray-800 text-gray-500'
-                                                    }`}>
+                                                    }`} style={isExpanded ? { scrollBehavior: 'smooth' } : undefined}>
                                                         {isExpanded ? (
                                                             <div className="space-y-2">
                                                                 {log.output && (
