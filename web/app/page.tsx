@@ -60,6 +60,7 @@ const SUGGESTED_COMMANDS = [
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [inputCommand, setInputCommand] = useState("");
@@ -84,6 +85,7 @@ export default function Home() {
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setErrorMsg(""); // Clear previous errors
       if (currentUser && currentUser.email) {
         const envAllowed = process.env.NEXT_PUBLIC_ALLOWED_EMAILS;
         if (envAllowed) {
@@ -91,7 +93,7 @@ export default function Home() {
             if (!allowed.includes(currentUser.email)) {
                 console.log("Access denied for:", currentUser.email);
                 await signOut(auth);
-                alert("Access Denied: Your email is not in the allowed list.");
+                setErrorMsg("Access Denied: Your email is not in the allowed list.");
                 setUser(null);
                 setAuthLoading(false);
                 return;
@@ -303,6 +305,11 @@ export default function Home() {
       return (
           <div className="h-screen w-screen flex flex-col items-center justify-center bg-black text-white gap-4">
               <h1 className="text-2xl font-bold mb-4">DontPortForward Console</h1>
+              {errorMsg && (
+                <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-2 rounded max-w-md text-center">
+                  {errorMsg}
+                </div>
+              )}
               <button 
                 onClick={handleLogin}
                 className="bg-white text-black px-6 py-3 rounded font-bold hover:bg-gray-200 transition-colors flex items-center gap-2"
