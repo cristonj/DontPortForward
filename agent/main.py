@@ -447,13 +447,11 @@ class Agent:
                 del self.active_commands[cmd_id]
 
             is_busy = len(self.active_commands) > 0
-            if is_busy:
-                self.last_activity_time = current_time
 
             idle_time = current_time - self.last_activity_time
             
             if self.watch: 
-                if idle_time > self.idle_timeout and not is_busy:
+                if idle_time > self.idle_timeout:
                     print(f"No activity for {self.idle_timeout}s. Entering sleep mode...")
                     self.stop_watching()
                 else:

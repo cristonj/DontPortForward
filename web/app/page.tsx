@@ -83,7 +83,21 @@ export default function Home() {
    */
   // Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser && currentUser.email) {
+        const envAllowed = process.env.NEXT_PUBLIC_ALLOWED_EMAILS;
+        if (envAllowed) {
+            const allowed = envAllowed.split(',').map(e => e.trim());
+            if (!allowed.includes(currentUser.email)) {
+                console.log("Access denied for:", currentUser.email);
+                await signOut(auth);
+                alert("Access Denied: Your email is not in the allowed list.");
+                setUser(null);
+                setAuthLoading(false);
+                return;
+            }
+        }
+      }
       setUser(currentUser);
       setAuthLoading(false);
     });
