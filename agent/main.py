@@ -49,7 +49,7 @@ if not STORAGE_BUCKET:
     print("Warning: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET not found in environment variables.")
 
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
-IDLE_TIMEOUT = 30
+IDLE_TIMEOUT = 60
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
 API_URL = "http://localhost:8000"
 
