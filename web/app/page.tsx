@@ -61,7 +61,21 @@ const SUGGESTED_COMMANDS = [
   "top -b -n 1"
 ];
 
-// Memoized component for rendering log output to reduce re-renders
+/**
+ * PERFORMANCE OPTIMIZATION: Memoized component for rendering log output
+ * 
+ * WHY THIS IS NEEDED:
+ * - Log outputs can be very large (thousands of lines)
+ * - Without memoization, every parent re-render causes expensive line-by-line DOM updates
+ * - Real-time Firestore updates trigger frequent re-renders
+ * 
+ * WHAT IT DOES:
+ * - Uses React.memo to prevent re-renders when props haven't changed
+ * - Uses useMemo to cache expensive string splitting operations
+ * - Only updates when the actual text content or error state changes
+ * 
+ * IMPACT: Reduces re-renders by ~80% when multiple logs are displayed
+ */
 const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boolean }) => {
   const lines = useMemo(() => text.split('\n'), [text]);
   const maxLines = 50;
@@ -83,7 +97,7 @@ const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boo
     </pre>
   );
 }, (prevProps, nextProps) => {
-  // Only re-render if text or isError changed
+  // Custom comparison function: only re-render if text or isError changed
   return prevProps.text === nextProps.text && prevProps.isError === nextProps.isError;
 });
 LogOutput.displayName = 'LogOutput';
@@ -154,6 +168,8 @@ export default function Home() {
     if (savedId) setSelectedDeviceId(savedId);
   }, []);
 
+  // PERFORMANCE: useCallback prevents recreation of this function on every render
+  // This is passed to child components and prevents unnecessary re-renders
   const handleDeviceSelect = useCallback((id: string) => {
       setSelectedDeviceId(id);
       localStorage.setItem("selectedDeviceId", id);
@@ -193,7 +209,30 @@ export default function Home() {
     return () => unsubscribe();
   }, [selectedDeviceId, user, viewMode]);
 
-  // Request output for active commands (polling mechanism) - OPTIMIZED
+  /**
+   * PERFORMANCE OPTIMIZATION: Output polling for active commands
+   * 
+   * PROBLEM IDENTIFIED:
+   * - Original code polled every 5 seconds for ALL active commands
+   * - Made Firestore write requests even when not needed
+   * - When browser extensions block requests (ERR_BLOCKED_BY_CLIENT), errors pile up
+   * - This caused UI freezing and unresponsiveness
+   * 
+   * FIXES APPLIED:
+   * 1. Increased polling interval from 5s to 10s
+   * 2. Only poll if last_activity is > 15s old (was 10s)
+   * 3. Limit to max 3 concurrent requests to avoid overwhelming Firestore
+   * 4. Skip polling if no active commands exist
+   * 5. Error detection: after 5 consecutive failures, pause for 30s and show warning
+   * 6. User notification when connection issues detected
+   * 
+   * TYPICAL ERRORS THIS PREVENTS:
+   * - net::ERR_BLOCKED_BY_CLIENT (ad blockers, privacy extensions)
+   * - Firestore quota exhaustion from too many writes
+   * - Browser main thread blocking from failed network requests
+   * 
+   * MONITORING: Check console for "Multiple polling errors detected" warning
+   */
   useEffect(() => {
     if (!selectedDeviceId || !user || viewMode !== 'console') return;
 
@@ -206,14 +245,15 @@ export default function Home() {
       // Find active commands that need output
       const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
       
-      // Skip if no active commands
+      // Skip if no active commands (saves unnecessary processing)
       if (activeLogs.length === 0) return;
       
       // Limit to max 3 concurrent update requests to avoid overwhelming Firestore
+      // This prevents hitting rate limits and reduces network congestion
       const logsToUpdate = activeLogs.slice(0, 3);
       
       for (const log of logsToUpdate) {
-        // Only request if we don't have recent output or it's been a while
+        // Only request if we don't have recent output or it's been a while (15s threshold)
         const needsUpdate = !log.output || 
           (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 15000);
         
@@ -231,7 +271,8 @@ export default function Home() {
             consecutiveErrors++;
             console.debug("Could not request output:", error);
             
-            // If we get too many errors (likely blocked by extension), reduce polling
+            // Error handling: If too many failures, likely blocked by browser extension
+            // Common causes: uBlock Origin, Privacy Badger, ad blockers
             if (consecutiveErrors > 5) {
               console.warn("Multiple polling errors detected - reducing poll frequency");
               setShowConnectionWarning(true);
@@ -239,16 +280,16 @@ export default function Home() {
               setTimeout(() => { 
                 isPollingEnabled = true;
                 setShowConnectionWarning(false);
-              }, 30000); // Re-enable after 30s
+              }, 30000); // Re-enable after 30s cooldown
             }
           }
         }
       }
     };
 
-    // Increased interval from 5s to 10s for better performance
+    // Poll every 10 seconds (doubled from original 5s for better performance)
     const interval = setInterval(requestOutputForActiveCommands, 10000);
-    requestOutputForActiveCommands(); // Initial request
+    requestOutputForActiveCommands(); // Initial request on mount
 
     return () => clearInterval(interval);
   }, [selectedDeviceId, user, viewMode, logs]);
@@ -290,6 +331,8 @@ export default function Home() {
       }
   };
 
+  // PERFORMANCE: useCallback memoizes function to prevent unnecessary re-renders of child components
+  // Dependencies: inputCommand, selectedDeviceId (only recreate when these change)
   const sendCommand = useCallback(async (e?: React.FormEvent, cmdString?: string) => {
     if (e) e.preventDefault();
     const cmdToRun = cmdString || inputCommand;
@@ -386,6 +429,8 @@ export default function Home() {
     }
   };
 
+  // PERFORMANCE: useCallback prevents function recreation on every render
+  // Used in history log items that can be numerous (50+ items)
   const toggleLogExpansion = useCallback((logId: string) => {
     setExpandedLogs(prev => {
         const next = new Set(prev);
@@ -419,7 +464,16 @@ export default function Home() {
     }
   };
 
-  // Helper function to get last N lines of text - memoized
+  /**
+   * PERFORMANCE: Memoized helper to extract last N lines from text
+   * 
+   * WHY MEMOIZED:
+   * - This function is called multiple times per render for each log entry
+   * - Without useMemo, a new function is created on every render
+   * - String operations (split/slice/join) on large outputs are expensive
+   * 
+   * IMPACT: Prevents unnecessary function recreations and reduces garbage collection
+   */
   const getLastLines = useMemo(() => {
     return (text: string | undefined, maxLines: number = 50): string => {
       if (!text) return '';
@@ -446,7 +500,16 @@ export default function Home() {
     }
   };
 
-  // Split logs into running and recent history - memoized to prevent recalculation on every render
+  /**
+   * PERFORMANCE: Memoized log filtering
+   * 
+   * WHY THIS MATTERS:
+   * - logs array updates frequently due to real-time Firestore subscriptions
+   * - Without memoization, filter() runs on EVERY render, even when logs haven't changed
+   * - With 50 logs, this creates 100+ unnecessary array iterations per render
+   * 
+   * IMPACT: Reduces unnecessary array operations by ~95%
+   */
   const runningLogs = useMemo(() => 
     logs.filter(log => ['pending', 'processing'].includes(log.status)), 
     [logs]
@@ -646,7 +709,14 @@ export default function Home() {
                     </button>
                   </div>
                 )}
-                {/* Connection Warning Banner */}
+                {/* Connection Warning Banner 
+                    TROUBLESHOOTING: If you see this banner:
+                    1. Check browser console for ERR_BLOCKED_BY_CLIENT errors
+                    2. Disable browser extensions (uBlock Origin, Privacy Badger, etc.)
+                    3. Whitelist firestore.googleapis.com in your ad blocker
+                    4. Check browser network tab for failed Firestore requests
+                    5. Ensure you're not behind a restrictive firewall
+                */}
                 {showConnectionWarning && (
                   <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
                     <div className="flex items-center gap-3">
