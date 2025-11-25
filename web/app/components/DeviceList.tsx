@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
-import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import { collection, onSnapshot, query, where, or } from "firebase/firestore";
 
 interface Device {
   id: string;
@@ -59,9 +59,22 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
   const [devices, setDevices] = useState<Device[]>([]);
 
   useEffect(() => {
-    // Note: 'orderBy' might require an index in Firestore. 
-    // If it fails, we can remove orderBy or create the index.
-    const q = query(collection(db, "devices"), orderBy("last_seen", "desc"));
+    // We filter server-side to comply with security rules.
+    // We remove orderBy from the query to avoid needing a composite index.
+    let q;
+    const devicesRef = collection(db, "devices");
+
+    if (currentUserEmail) {
+        q = query(devicesRef, 
+            or(
+                where("allowed_emails", "==", []),
+                where("allowed_emails", "array-contains", currentUserEmail)
+            )
+        );
+    } else {
+        // If not logged in, only show public devices
+        q = query(devicesRef, where("allowed_emails", "==", []));
+    }
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const deviceList = snapshot.docs.map(doc => ({
@@ -69,15 +82,20 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
         ...doc.data()
       } as Device));
       
-      const filteredDevices = deviceList.filter(device => {
-        if (!device.allowed_emails || device.allowed_emails.length === 0) return true;
-        if (!currentUserEmail) return false;
-        return device.allowed_emails.includes(currentUserEmail);
+      // Sort in memory since we can't easily index for the OR query + sort
+      deviceList.sort((a, b) => {
+          const tA = a.last_seen?.seconds || 0;
+          const tB = b.last_seen?.seconds || 0;
+          return tB - tA; // Descending
       });
 
-      setDevices(filteredDevices);
+      // No need for client-side filtering of allowed_emails as the query handles it,
+      // but we can keep a safety check or just set state.
+      setDevices(deviceList);
     }, (error) => {
         console.error("Error fetching devices:", error);
+        // If permission denied, it might be due to the query not matching rules exactly in some edge cases,
+        // or index missing.
     });
 
     return () => unsubscribe();
