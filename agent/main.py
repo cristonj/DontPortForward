@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import warnings
 from requests.exceptions import RequestException, ConnectionError, Timeout
-from google.api_core import retry, exceptions as google_exceptions
+from google.api_core import exceptions as google_exceptions
 try:
     from api import app as api_app
 except ImportError:

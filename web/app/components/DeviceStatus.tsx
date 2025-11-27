@@ -39,10 +39,6 @@ interface DeviceStatusProps {
 }
 
 export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
-  /**
-   * Displays real-time status information for a selected device.
-   * Allows modifying the polling rate configuration.
-   */
   const [device, setDevice] = useState<Device | null>(null);
   const [loading, setLoading] = useState(true);
   const [localPollingRate, setLocalPollingRate] = useState<number | null>(null);
@@ -72,17 +68,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
     });
 
     return () => unsub();
-  }, [deviceId]); // Removed localPollingRate dependency to prevent loop
-
-  // Sync local polling rate when device data updates, but only if we don't have one set yet (handled above)
-  // Actually, better to just use key/id approach or let user drive input. 
-  // If external update happens, we should probably reflect it unless user is dragging.
-  
-  useEffect(() => {
-      if (device?.polling_rate) {
-          setLocalPollingRate(prev => prev === null ? device.polling_rate! : prev);
-      }
-  }, [device?.polling_rate]);
+  }, [deviceId]);
 
   const handlePollingChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = parseInt(e.target.value);

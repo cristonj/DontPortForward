@@ -1,13 +1,12 @@
-from fastapi import FastAPI, HTTPException, Body, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional
 import psutil
 import platform
 import subprocess
 import os
 import socket
-import glob
 
 # Command registry - will be set by main.py after initialization
 # This avoids circular import issues
