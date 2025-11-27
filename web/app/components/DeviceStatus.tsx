@@ -91,12 +91,29 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
 
   const commitPollingChange = async () => {
       if (!device || localPollingRate === null) return;
-      try {
+      const maxRetries = 2;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
           await updateDoc(doc(db, "devices", deviceId), {
               polling_rate: localPollingRate
           });
-      } catch (error) {
-          console.error("Error updating polling rate:", error);
+          return; // Success
+        } catch (error: any) {
+          const isNetworkError = error?.code === 'unavailable' || 
+                                error?.code === 'deadline-exceeded' ||
+                                error?.message?.includes('network') ||
+                                error?.message?.includes('fetch');
+          
+          if (isNetworkError && attempt < maxRetries - 1) {
+            const waitTime = Math.pow(2, attempt) * 1000;
+            console.log(`Network error updating polling rate (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          } else {
+            console.error("Error updating polling rate:", error);
+            alert(`Failed to update polling rate${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+            return;
+          }
+        }
       }
   };
 
