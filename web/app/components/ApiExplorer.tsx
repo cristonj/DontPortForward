@@ -137,15 +137,41 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
         }
       }
 
-      const commandsRef = collection(db, "devices", deviceId, "commands");
-      const docRef = await addDoc(commandsRef, {
-        type: 'api',
-        endpoint: selectedEndpoint.path,
-        method: selectedEndpoint.method,
-        body: bodyData,
-        status: 'pending',
-        created_at: serverTimestamp()
-      });
+      // Retry logic for sending API command
+      const maxRetries = 3;
+      let docRef: any = null;
+      
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const commandsRef = collection(db, "devices", deviceId, "commands");
+          docRef = await addDoc(commandsRef, {
+            type: 'api',
+            endpoint: selectedEndpoint.path,
+            method: selectedEndpoint.method,
+            body: bodyData,
+            status: 'pending',
+            created_at: serverTimestamp()
+          });
+          break; // Success
+        } catch (error: any) {
+          const isNetworkError = error?.code === 'unavailable' || 
+                                error?.code === 'deadline-exceeded' ||
+                                error?.message?.includes('network') ||
+                                error?.message?.includes('fetch');
+          
+          if (isNetworkError && attempt < maxRetries - 1) {
+            const waitTime = Math.pow(2, attempt) * 1000;
+            console.log(`Network error sending API command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          } else {
+            throw error; // Re-throw to be caught by outer catch
+          }
+        }
+      }
+      
+      if (!docRef) {
+        throw new Error("Failed to create command after retries");
+      }
 
       const unsubscribe = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (snap) => {
         const data = snap.data();

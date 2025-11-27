@@ -265,28 +265,46 @@ export default function Home() {
           (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 30000);
         
         if (needsUpdate) {
-          try {
-            const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-            await updateDoc(commandRef, {
-              output_request: {
-                seconds: 60,  // Request last 60 seconds
-                request_id: `${Date.now()}-${Math.random()}`
+          // Retry logic for output requests
+          const maxRetries = 2;
+          let requestSuccess = false;
+          for (let retryAttempt = 0; retryAttempt < maxRetries; retryAttempt++) {
+            try {
+              const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
+              await updateDoc(commandRef, {
+                output_request: {
+                  seconds: 60,  // Request last 60 seconds
+                  request_id: `${Date.now()}-${Math.random()}`
+                }
+              });
+              consecutiveErrors = 0; // Reset error counter on success
+              requestSuccess = true;
+              break; // Success
+            } catch (error: any) {
+              const isNetworkError = error?.code === 'unavailable' || 
+                                    error?.code === 'deadline-exceeded' ||
+                                    error?.message?.includes('network') ||
+                                    error?.message?.includes('fetch');
+              
+              if (isNetworkError && retryAttempt < maxRetries - 1) {
+                const waitTime = Math.pow(2, retryAttempt) * 500; // Shorter backoff for polling
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+              } else {
+                consecutiveErrors++;
+                console.debug("Could not request output:", error);
+                
+                // Error handling: If too many failures, likely blocked by browser extension
+                if (consecutiveErrors > 5) {
+                  console.warn("Multiple polling errors detected - reducing poll frequency");
+                  setShowConnectionWarning(true);
+                  isPollingEnabled = false;
+                  setTimeout(() => { 
+                    isPollingEnabled = true;
+                    setShowConnectionWarning(false);
+                  }, 60000);
+                }
+                break; // Don't retry further
               }
-            });
-            consecutiveErrors = 0; // Reset error counter on success
-          } catch (error: any) {
-            consecutiveErrors++;
-            console.debug("Could not request output:", error);
-            
-            // Error handling: If too many failures, likely blocked by browser extension
-            if (consecutiveErrors > 5) {
-              console.warn("Multiple polling errors detected - reducing poll frequency");
-              setShowConnectionWarning(true);
-              isPollingEnabled = false;
-              setTimeout(() => { 
-                isPollingEnabled = true;
-                setShowConnectionWarning(false);
-              }, 60000);
             }
           }
         }
@@ -316,18 +334,33 @@ export default function Home() {
         return;
       }
       
-      // Request output for all active commands
+      // Request output for all active commands with retry logic
       const requests = activeLogs.map(async (log) => {
-        try {
-          const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-          await updateDoc(commandRef, {
-            output_request: {
-              seconds: 60,
-              request_id: `${Date.now()}-${Math.random()}`
+        const maxRetries = 2;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
+            await updateDoc(commandRef, {
+              output_request: {
+                seconds: 60,
+                request_id: `${Date.now()}-${Math.random()}`
+              }
+            });
+            break; // Success
+          } catch (error: any) {
+            const isNetworkError = error?.code === 'unavailable' || 
+                                  error?.code === 'deadline-exceeded' ||
+                                  error?.message?.includes('network') ||
+                                  error?.message?.includes('fetch');
+            
+            if (isNetworkError && attempt < maxRetries - 1) {
+              const waitTime = Math.pow(2, attempt) * 500;
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+            } else {
+              console.debug("Could not request output for command:", log.id, error);
+              break;
             }
-          });
-        } catch (error: any) {
-          console.debug("Could not request output for command:", log.id, error);
+          }
         }
       });
       
@@ -384,29 +417,49 @@ export default function Home() {
     
     if (!cmdToRun.trim() || !selectedDeviceId) return;
 
-    try {
-      const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-      await addDoc(commandsRef, {
-        command: cmdToRun,
-        type: 'shell', // Default to shell
-        status: 'pending',
-        created_at: serverTimestamp()
-      });
-      setErrorMsg(""); // Clear any previous errors
-      if (!cmdString) {
-          setInputCommand("");
-          setShowSuggestions(false);
-      } else {
-          // Switch to console view to see output
-          setViewMode('console');
-      }
-    } catch (error: any) {
-      console.error("Error sending command:", error);
-      const errorMessage = error?.message || "Failed to send command. Check console for details.";
-      setErrorMsg(`Error: ${errorMessage}`);
-      // Log full error details for debugging
-      if (error?.code) {
-        console.error("Firebase error code:", error.code);
+    const maxRetries = 3;
+    let lastError: any = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
+        await addDoc(commandsRef, {
+          command: cmdToRun,
+          type: 'shell', // Default to shell
+          status: 'pending',
+          created_at: serverTimestamp()
+        });
+        setErrorMsg(""); // Clear any previous errors
+        if (!cmdString) {
+            setInputCommand("");
+            setShowSuggestions(false);
+        } else {
+            // Switch to console view to see output
+            setViewMode('console');
+        }
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch') ||
+                              error?.message?.includes('Failed to fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff in ms
+          console.log(`Network error sending command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error sending command:", error);
+          const errorMessage = error?.message || "Failed to send command. Check console for details.";
+          setErrorMsg(`Error: ${errorMessage}${attempt === maxRetries - 1 ? ` (after ${maxRetries} attempts)` : ''}`);
+          // Log full error details for debugging
+          if (error?.code) {
+            console.error("Firebase error code:", error.code);
+          }
+          return;
+        }
       }
     }
   }, [inputCommand, selectedDeviceId]);
@@ -415,7 +468,9 @@ export default function Home() {
     if (!selectedDeviceId) return;
     if (!confirm("Are you sure you want to restart the agent on this device?")) return;
     
-    try {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
         const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
         await addDoc(commandsRef, {
           type: 'restart',
@@ -423,20 +478,51 @@ export default function Home() {
           status: 'pending',
           created_at: serverTimestamp()
         });
-    } catch (error) {
-        console.error("Error sending restart command:", error);
+        return; // Success
+      } catch (error: any) {
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error sending restart command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error sending restart command:", error);
+          alert(`Failed to send restart command${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          return;
+        }
+      }
     }
   };
 
   const killCommand = async (cmdId: string) => {
     if (!selectedDeviceId) return;
-    try {
+    const maxRetries = 2;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
         const commandRef = doc(db, "devices", selectedDeviceId, "commands", cmdId);
         await updateDoc(commandRef, {
             kill_signal: true
         });
-    } catch (error) {
-        console.error("Error killing command:", error);
+        return; // Success
+      } catch (error: any) {
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error killing command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error killing command:", error);
+          return;
+        }
+      }
     }
   };
 
@@ -451,10 +537,26 @@ export default function Home() {
     
     if (!confirm(confirmMessage)) return;
     
-    try {
+    const maxRetries = 2;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
         await deleteDoc(doc(db, "devices", selectedDeviceId, "commands", logId));
-    } catch (error) {
-        console.error("Error deleting command:", error);
+        return; // Success
+      } catch (error: any) {
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error deleting command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error deleting command:", error);
+          return;
+        }
+      }
     }
   };
 
@@ -462,15 +564,32 @@ export default function Home() {
     if (!selectedDeviceId || historyLogs.length === 0) return;
     if (!confirm("Clear terminal history? This cannot be undone.")) return;
 
-    try {
-      const batch = writeBatch(db);
-      historyLogs.forEach(log => {
-        const docRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-        batch.delete(docRef);
-      });
-      await batch.commit();
-    } catch (error) {
-      console.error("Error clearing history:", error);
+    const maxRetries = 2;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const batch = writeBatch(db);
+        historyLogs.forEach(log => {
+          const docRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
+          batch.delete(docRef);
+        });
+        await batch.commit();
+        return; // Success
+      } catch (error: any) {
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error clearing history (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error clearing history:", error);
+          alert(`Failed to clear history${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          return;
+        }
+      }
     }
   };
 
@@ -492,20 +611,36 @@ export default function Home() {
     if (!selectedDeviceId || !user) return;
     setIsRefreshing(true);
     
-    try {
-      const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-      const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
-      const snapshot = await getDocs(q);
-      
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setLogs(newLogs);
-    } catch (error) {
-      console.error("Error refreshing logs:", error);
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 500);
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
+        const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
+        const snapshot = await getDocs(q);
+        
+        const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as CommandLog));
+        setLogs(newLogs);
+        setTimeout(() => setIsRefreshing(false), 500);
+        return; // Success
+      } catch (error: any) {
+        const isNetworkError = error?.code === 'unavailable' || 
+                              error?.code === 'deadline-exceeded' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error refreshing logs (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error refreshing logs:", error);
+          setTimeout(() => setIsRefreshing(false), 500);
+          return;
+        }
+      }
     }
   };
 

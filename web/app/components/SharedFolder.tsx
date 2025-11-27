@@ -39,19 +39,47 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   const fetchFiles = async () => {
     if (!deviceId) return;
     setLoading(true);
-    try {
-      const listRef = ref(storage, `agents/${deviceId}/shared`);
-      const res = await listAll(listRef);
-      const fileItems = res.items.map((itemRef) => ({
-        name: itemRef.name,
-        fullPath: itemRef.fullPath,
-        ref: itemRef,
-      }));
-      setFiles(fileItems);
-    } catch (error) {
-      console.error("Error fetching files:", error);
-    } finally {
-      setLoading(false);
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const listRef = ref(storage, `agents/${deviceId}/shared`);
+        const res = await listAll(listRef);
+        const fileItems = res.items.map((itemRef) => ({
+          name: itemRef.name,
+          fullPath: itemRef.fullPath,
+          ref: itemRef,
+        }));
+        setFiles(fileItems);
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        // Check if it's a network error (Firebase storage errors)
+        const isNetworkError = error?.code === 'storage/network-request-failed' || 
+                              error?.code === 'unavailable' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff in ms
+          console.log(`Network error fetching files (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          // Non-network error or final attempt
+          console.error("Error fetching files:", error);
+          break;
+        }
+      } finally {
+        if (attempt === maxRetries - 1) {
+          setLoading(false);
+        }
+      }
+    }
+    
+    setLoading(false);
+    if (lastError) {
+      console.error("Failed to fetch files after retries:", lastError);
     }
   };
 
@@ -64,17 +92,37 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     const file = e.target.files[0];
     
     setUploading(true);
-    try {
-      const storageRef = ref(storage, `agents/${deviceId}/shared/${file.name}`);
-      await uploadBytes(storageRef, file);
-      await fetchFiles();
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      alert("Failed to upload file");
-    } finally {
-      setUploading(false);
-      // Reset input
-      e.target.value = "";
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const storageRef = ref(storage, `agents/${deviceId}/shared/${file.name}`);
+        await uploadBytes(storageRef, file);
+        await fetchFiles();
+        // Reset input on success
+        e.target.value = "";
+        setUploading(false);
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error?.code === 'storage/network-request-failed' || 
+                              error?.code === 'unavailable' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error uploading file (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error uploading file:", error);
+          alert(`Failed to upload file${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          setUploading(false);
+          e.target.value = "";
+          return;
+        }
+      }
     }
   };
 
@@ -86,7 +134,11 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     }
 
     setUploading(true);
-    try {
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
         const blob = new Blob([newFileContent], { type: 'text/plain' });
         const storageRef = ref(storage, `agents/${deviceId}/shared/${newFileName}`);
         await uploadBytes(storageRef, blob);
@@ -94,20 +146,64 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
         setIsCreatingFile(false);
         setNewFileName("");
         setNewFileContent("");
-    } catch (error) {
-        console.error("Error creating file:", error);
-        alert("Failed to create file");
-    } finally {
         setUploading(false);
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error?.code === 'storage/network-request-failed' || 
+                              error?.code === 'unavailable' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error creating file (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error creating file:", error);
+          alert(`Failed to create file${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          setUploading(false);
+          return;
+        }
+      }
     }
   };
 
   const handleEditFile = async (fileItem: FileItem) => {
     // Only allow editing text files for now to avoid issues with large binaries
     const MAX_SIZE = 1024 * 1024; // 1MB limit
-    try {
-        const url = await getDownloadURL(fileItem.ref);
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    // Retry getting download URL
+    let url: string | null = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        url = await getDownloadURL(fileItem.ref);
+        break;
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff in ms
+          console.log(`Network error getting download URL (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
+    
+    if (!url) {
+      alert(`Failed to load file after ${maxRetries} attempts: ${lastError?.message || 'Network error'}`);
+      return;
+    }
+    
+    // Retry fetching file content
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
         const response = await fetch(url);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
         
         // Check size roughly
         // Cloud storage CORS might block content-length, or it might be null
@@ -115,42 +211,91 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
         const size = sizeHeader ? Number(sizeHeader) : 0;
         
         if (size > MAX_SIZE) {
-            alert("File is too large to edit in the browser.");
-            return;
+          alert("File is too large to edit in the browser.");
+          return;
         }
 
         const text = await response.text();
         // Double check length of text content
         if (text.length > MAX_SIZE) {
-            alert("File is too large to edit in the browser.");
-            return;
+          alert("File is too large to edit in the browser.");
+          return;
         }
 
         setNewFileName(fileItem.name);
         setNewFileContent(text);
         setIsCreatingFile(true);
-    } catch (error) {
-        console.error("Error fetching file content:", error);
-        alert("Failed to load file for editing.");
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error fetching file content (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
     }
+    
+    console.error("Error fetching file content:", lastError);
+    alert(`Failed to load file for editing after ${maxRetries} attempts: ${lastError?.message || 'Network error'}`);
   };
 
   const handleDownload = async (fileItem: FileItem) => {
-    try {
-      const url = await getDownloadURL(fileItem.ref);
-      window.open(url, '_blank');
-    } catch (error) {
-      console.error("Error getting download URL:", error);
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const url = await getDownloadURL(fileItem.ref);
+        window.open(url, '_blank');
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error?.code === 'storage/network-request-failed' || 
+                              error?.code === 'unavailable' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error getting download URL (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error getting download URL:", error);
+          alert(`Failed to download file${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          return;
+        }
+      }
     }
   };
 
   const handleDelete = async (fileItem: FileItem) => {
     if (!confirm(`Are you sure you want to delete ${fileItem.name}?`)) return;
-    try {
-      await deleteObject(fileItem.ref);
-      await fetchFiles();
-    } catch (error) {
-      console.error("Error deleting file:", error);
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await deleteObject(fileItem.ref);
+        await fetchFiles();
+        return; // Success
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error?.code === 'storage/network-request-failed' || 
+                              error?.code === 'unavailable' ||
+                              error?.message?.includes('network') ||
+                              error?.message?.includes('fetch');
+        
+        if (isNetworkError && attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Network error deleting file (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.error("Error deleting file:", error);
+          alert(`Failed to delete file${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
+          return;
+        }
+      }
     }
   };
 

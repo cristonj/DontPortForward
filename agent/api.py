@@ -40,14 +40,20 @@ def get_ip_address():
     Uses a connection to a public DNS server (8.8.8.8) to determine the
     local IP address used for outbound traffic. This does not actually
     establish a connection.
+    Gracefully handles network failures by falling back to localhost.
     """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)  # Set timeout to avoid hanging
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except:
+    except (socket.timeout, socket.error, OSError) as e:
+        # Network error - fallback to localhost
+        return "127.0.0.1"
+    except Exception:
+        # Any other error - fallback to localhost
         return "127.0.0.1"
 
 def get_git_info():
