@@ -47,7 +47,7 @@ Remote device management using Firebase as a relay. No port forwarding required.
     *   `NEXT_PUBLIC_FIREBASE_PROJECT_ID` & `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`: Required if not loading from `web/.env`.
 4.  Run the agent:
     ```bash
-    python main.py
+    python ../wrapper/launcher.py
     ```
 
 ## Usage
