@@ -61,21 +61,7 @@ const SUGGESTED_COMMANDS = [
   "top -b -n 1"
 ];
 
-/**
- * PERFORMANCE OPTIMIZATION: Memoized component for rendering log output
- * 
- * WHY THIS IS NEEDED:
- * - Log outputs can be very large (thousands of lines)
- * - Without memoization, every parent re-render causes expensive line-by-line DOM updates
- * - Real-time Firestore updates trigger frequent re-renders
- * 
- * WHAT IT DOES:
- * - Uses React.memo to prevent re-renders when props haven't changed
- * - Uses useMemo to cache expensive string splitting operations
- * - Only updates when the actual text content or error state changes
- * 
- * IMPACT: Reduces re-renders by ~80% when multiple logs are displayed
- */
+// Memoized log output component to prevent expensive re-renders
 const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boolean }) => {
   const lines = useMemo(() => text.split('\n'), [text]);
   const maxLines = 10;
@@ -132,10 +118,6 @@ export default function Home() {
   const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
   const [isRequestingOutput, setIsRequestingOutput] = useState(false);
 
-  /**
-   * Main dashboard component.
-   * Manages authentication, device selection, and view modes (console, files, api, status).
-   */
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -172,8 +154,6 @@ export default function Home() {
     if (savedId) setSelectedDeviceId(savedId);
   }, []);
 
-  // PERFORMANCE: useCallback prevents recreation of this function on every render
-  // This is passed to child components and prevents unnecessary re-renders
   const handleDeviceSelect = useCallback((id: string) => {
       setSelectedDeviceId(id);
       localStorage.setItem("selectedDeviceId", id);
@@ -213,27 +193,7 @@ export default function Home() {
     return () => unsubscribe();
   }, [selectedDeviceId, user, viewMode]);
 
-  /**
-   * PERFORMANCE OPTIMIZATION: Output polling for active commands
-   * 
-   * MANUAL CONTROL: Auto-polling is now OPTIONAL and disabled by default
-   * - Users can enable auto-polling via toggle button
-   * - Manual "Request Output" button available for on-demand updates
-   * - This reduces DB operations to near-zero when auto-polling is off
-   * 
-   * FIXES APPLIED:
-   * 1. Auto-polling disabled by default (was enabled every 30s)
-   * 2. Manual button to request output for active commands
-   * 3. Toggle to enable/disable auto-polling
-   * 4. When enabled: polls every 30s (reduced from 10s)
-   * 5. Pause polling when page/tab is not visible (Page Visibility API)
-   * 6. Error detection: after 5 consecutive failures, pause for 60s
-   * 
-   * TYPICAL ERRORS THIS PREVENTS:
-   * - net::ERR_BLOCKED_BY_CLIENT (ad blockers, privacy extensions)
-   * - Firestore quota exhaustion from too many writes
-   * - Browser main thread blocking from failed network requests
-   */
+  // Auto-polling for active commands (disabled by default to reduce DB ops)
   useEffect(() => {
     if (!selectedDeviceId || !user || viewMode !== 'console' || !autoPollingEnabled) return;
 
@@ -409,8 +369,6 @@ export default function Home() {
       }
   };
 
-  // PERFORMANCE: useCallback memoizes function to prevent unnecessary re-renders of child components
-  // Dependencies: inputCommand, selectedDeviceId (only recreate when these change)
   const sendCommand = useCallback(async (e?: React.FormEvent, cmdString?: string) => {
     if (e) e.preventDefault();
     const cmdToRun = cmdString || inputCommand;
@@ -593,8 +551,6 @@ export default function Home() {
     }
   };
 
-  // PERFORMANCE: useCallback prevents function recreation on every render
-  // Used in history log items that can be numerous (50+ items)
   const toggleLogExpansion = useCallback((logId: string) => {
     setExpandedLogs(prev => {
         const next = new Set(prev);
@@ -644,16 +600,6 @@ export default function Home() {
     }
   };
 
-  /**
-   * PERFORMANCE: Memoized helper to extract last N lines from text
-   * 
-   * WHY MEMOIZED:
-   * - This function is called multiple times per render for each log entry
-   * - Without useMemo, a new function is created on every render
-   * - String operations (split/slice/join) on large outputs are expensive
-   * 
-   * IMPACT: Prevents unnecessary function recreations and reduces garbage collection
-   */
   const getLastLines = useMemo(() => {
     return (text: string | undefined, maxLines: number = 10): string => {
       if (!text) return '';
@@ -680,16 +626,6 @@ export default function Home() {
     }
   };
 
-  /**
-   * PERFORMANCE: Memoized log filtering
-   * 
-   * WHY THIS MATTERS:
-   * - logs array updates frequently due to real-time Firestore subscriptions
-   * - Without memoization, filter() runs on EVERY render, even when logs haven't changed
-   * - With 50 logs, this creates 100+ unnecessary array iterations per render
-   * 
-   * IMPACT: Reduces unnecessary array operations by ~95%
-   */
   const runningLogs = useMemo(() => 
     logs.filter(log => ['pending', 'processing'].includes(log.status)), 
     [logs]
@@ -889,14 +825,6 @@ export default function Home() {
                     </button>
                   </div>
                 )}
-                {/* Connection Warning Banner 
-                    TROUBLESHOOTING: If you see this banner:
-                    1. Check browser console for ERR_BLOCKED_BY_CLIENT errors
-                    2. Disable browser extensions (uBlock Origin, Privacy Badger, etc.)
-                    3. Whitelist firestore.googleapis.com in your ad blocker
-                    4. Check browser network tab for failed Firestore requests
-                    5. Ensure you're not behind a restrictive firewall
-                */}
                 {showConnectionWarning && (
                   <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -970,44 +898,17 @@ export default function Home() {
                                 title={autoPollingEnabled ? 'Disable auto-polling' : 'Enable auto-polling (updates every 30s)'}
                             >
                                 <span className="relative flex h-2 w-2">
-                                    {autoPollingEnabled && (
+                                    {autoPollingEnabled ? (
                                         <>
                                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                                             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
                                         </>
-                                    )}
-                                    {!autoPollingEnabled && (
+                                    ) : (
                                         <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500"></span>
                                     )}
                                 </span>
-                                {autoPollingEnabled ? 'Auto: ON' : 'Auto: OFF'}
+                                {autoPollingEnabled ? 'Live' : 'Manual'}
                             </button>
-                            
-                            {/* Status Indicator */}
-                            <div className={`backdrop-blur-sm border px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-2 text-[10px] ${
-                                autoPollingEnabled
-                                    ? 'bg-gray-800/90 border-gray-700'
-                                    : 'bg-gray-900/90 border-gray-800'
-                            }`}>
-                                <span className={`relative flex h-2 w-2 ${
-                                    autoPollingEnabled ? 'text-green-400' : 'text-gray-500'
-                                }`}>
-                                    {autoPollingEnabled && (
-                                        <>
-                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                                        </>
-                                    )}
-                                    {!autoPollingEnabled && (
-                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500"></span>
-                                    )}
-                                </span>
-                                <span className={`uppercase tracking-wider ${
-                                    autoPollingEnabled ? 'text-gray-300' : 'text-gray-500'
-                                }`}>
-                                    {autoPollingEnabled ? 'Live Updates' : 'Manual Mode'}
-                                </span>
-                            </div>
                         </div>
                     )}
                     {!selectedDeviceId && (
