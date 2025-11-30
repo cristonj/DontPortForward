@@ -624,10 +624,15 @@ class Agent:
         except Exception as e:
             print(f"Error preparing heartbeat: {e}")
 
+    def start_file_syncer(self):
+        """Start the file syncer if not already running."""
+        if not self.file_syncer.is_alive():
+            self.file_syncer.start()
+
     def listen_for_commands(self):
         self.last_activity_time = time.time()
         self.start_watching()
-        self.file_syncer.start()
+        self.start_file_syncer()
         
         while self.running:
             current_time = time.time()
@@ -678,6 +683,77 @@ class Agent:
         self.active_commands[cmd_id] = executor
         executor.start()
 
+    def run_startup_file(self):
+        """Check for and execute the startup file if configured."""
+        try:
+            # Get the device document to check for startup_file
+            doc_snapshot = self.doc_ref.get()
+            if not doc_snapshot.exists:
+                return
+            
+            data = doc_snapshot.to_dict()
+            startup_file = data.get('startup_file')
+            
+            if not startup_file:
+                return
+            
+            startup_path = os.path.join(SHARED_FOLDER_PATH, startup_file)
+            
+            if not os.path.exists(startup_path):
+                print(f"Startup file {startup_file} not found in shared folder. Skipping.")
+                return
+            
+            if not os.path.isfile(startup_path):
+                print(f"Startup file {startup_path} is not a file. Skipping.")
+                return
+            
+            print(f"Executing startup file: {startup_file}")
+            
+            # Determine how to execute based on file extension
+            file_ext = os.path.splitext(startup_file)[1].lower()
+            
+            if file_ext == '.py':
+                command = f"python {startup_path}"
+            elif file_ext in ['.sh', '.bash']:
+                command = f"bash {startup_path}"
+            elif file_ext in ['.ps1']:
+                command = f"powershell -ExecutionPolicy Bypass -File {startup_path}"
+            elif file_ext in ['.bat', '.cmd']:
+                command = startup_path
+            else:
+                # Try to execute directly (for executable files)
+                if os.access(startup_path, os.X_OK):
+                    command = startup_path
+                else:
+                    print(f"Unknown file type for startup file {startup_file}. Skipping.")
+                    return
+            
+            # Execute in background thread so it doesn't block agent startup
+            def run_startup():
+                try:
+                    env = os.environ.copy()
+                    env["PYTHONUNBUFFERED"] = "1"
+                    process = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=env,
+                        cwd=os.path.dirname(os.path.abspath(__file__))
+                    )
+                    # Don't wait for completion - let it run in background
+                    print(f"Startup file {startup_file} started (PID: {process.pid})")
+                except Exception as e:
+                    print(f"Error executing startup file {startup_file}: {e}")
+            
+            startup_thread = threading.Thread(target=run_startup)
+            startup_thread.daemon = True
+            startup_thread.start()
+            
+        except Exception as e:
+            print(f"Error checking/executing startup file: {e}")
+
 if __name__ == "__main__":
     print("Starting DontPortForward Agent...")
     
@@ -698,4 +774,14 @@ if __name__ == "__main__":
     
     agent = Agent(DEVICE_ID)
     agent.register()
+    
+    # Start file syncer early so startup files can be synced
+    agent.start_file_syncer()
+    
+    # Wait a moment for registration to complete and file syncer to sync files
+    time.sleep(5)
+    
+    # Check for and execute startup file
+    agent.run_startup_file()
+    
     agent.listen_for_commands()
