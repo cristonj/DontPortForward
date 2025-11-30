@@ -16,7 +16,7 @@ service cloud.firestore {
       function isAllowed(data) {
         return isSignedIn() && 
                hasValidConfig(data) && 
-               (data.allowed_emails.size() == 0 || request.auth.token.email in data.allowed_emails);
+               (request.auth.token.email in data.allowed_emails);
       }
       
       // Write access: User must be explicitly in the list
