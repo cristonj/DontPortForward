@@ -3,13 +3,25 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     match /devices/{deviceId} {
-      allow read: if request.auth != null && (
-        !('allowed_emails' in resource.data) ||
-        resource.data.allowed_emails == null ||
-        resource.data.allowed_emails.size() == 0 ||
-        request.auth.token.email in resource.data.allowed_emails
-      );
-      allow write: if false; 
+      function isAllowed() {
+        let deviceDoc = get(/databases/$(database)/documents/devices/$(deviceId));
+        let data = deviceDoc != null ? deviceDoc.data : {};
+        
+        return request.auth != null && (
+          deviceDoc == null ||
+          !('allowed_emails' in data) ||
+          data.allowed_emails == null ||
+          data.allowed_emails.size() == 0 ||
+          request.auth.token.email in data.allowed_emails
+        );
+      }
+      
+      allow read: if isAllowed();
+      
+      // Allow updates to startup_file field only, with same permission check as read
+      // Check that only startup_file field is being changed
+      allow update: if isAllowed() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['startup_file']); 
 
       match /commands/{commandId} {
         
