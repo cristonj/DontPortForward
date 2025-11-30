@@ -3,30 +3,91 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     match /devices/{deviceId} {
-      allow read: if request.auth != null && (
-        !('allowed_emails' in resource.data) ||
-        resource.data.allowed_emails == null ||
-        resource.data.allowed_emails.size() == 0 ||
-        request.auth.token.email in resource.data.allowed_emails
-      );
-      allow write: if false; 
+      // Function for read operations - user must be in allowed_emails OR allowed_emails must be empty
+      function isAllowed() {
+        // Must be authenticated
+        if (request.auth == null) {
+          return false;
+        }
+        
+        let deviceDoc = get(/databases/$(database)/documents/devices/$(deviceId));
+        
+        // Device must exist
+        if (deviceDoc == null) {
+          return false;
+        }
+        
+        let data = deviceDoc.data;
+        
+        // If allowed_emails doesn't exist or is null, deny access
+        if (!('allowed_emails' in data) || data.allowed_emails == null) {
+          return false;
+        }
+        
+        // Allow if allowed_emails is empty (public device) OR user's email is in the list
+        return data.allowed_emails.size() == 0 || 
+               request.auth.token.email in data.allowed_emails;
+      }
+      
+      // Stricter function for write operations - requires user to be explicitly in allowed_emails
+      function isAllowedToWrite() {
+        let deviceDoc = get(/databases/$(database)/documents/devices/$(deviceId));
+        
+        // Device must exist
+        if (deviceDoc == null) {
+          return false;
+        }
+        
+        let data = deviceDoc.data;
+        
+        // Must be authenticated
+        if (request.auth == null) {
+          return false;
+        }
+        
+        // allowed_emails must exist, be non-null, and non-empty
+        if (!('allowed_emails' in data) || 
+            data.allowed_emails == null || 
+            data.allowed_emails.size() == 0) {
+          return false;
+        }
+        
+        // User's email must be in the allowed_emails list
+        return request.auth.token.email in data.allowed_emails;
+      }
+      
+      allow read: if isAllowed();
+      
+      // Allow updates to startup_file field only, but require explicit permission in allowed_emails
+      // Check that only startup_file field is being changed
+      allow update: if isAllowedToWrite() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['startup_file']); 
 
       match /commands/{commandId} {
         
         function isAllowed() {
-          let deviceDoc = get(/databases/$(database)/documents/devices/$(deviceId));
-          // If the device document doesn't exist, we assume no restrictions (or you could deny).
-          // Assuming "no restrictions" lets you see commands for a ghost device, which is harmless.
-          // More importantly, it prevents the rule from crashing on null.data.
-          let data = deviceDoc != null ? deviceDoc.data : {};
+          // Must be authenticated
+          if (request.auth == null) {
+            return false;
+          }
           
-          return request.auth != null && (
-            deviceDoc == null ||
-            !('allowed_emails' in data) ||
-            data.allowed_emails == null ||
-            data.allowed_emails.size() == 0 ||
-            request.auth.token.email in data.allowed_emails
-          );
+          let deviceDoc = get(/databases/$(database)/documents/devices/$(deviceId));
+          
+          // Device must exist
+          if (deviceDoc == null) {
+            return false;
+          }
+          
+          let data = deviceDoc.data;
+          
+          // If allowed_emails doesn't exist or is null, deny access
+          if (!('allowed_emails' in data) || data.allowed_emails == null) {
+            return false;
+          }
+          
+          // Allow if allowed_emails is empty (public device) OR user's email is in the list
+          return data.allowed_emails.size() == 0 || 
+                 request.auth.token.email in data.allowed_emails;
         }
 
         allow read, list, create, update, delete: if isAllowed();
