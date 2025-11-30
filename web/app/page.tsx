@@ -848,7 +848,8 @@ export default function Home() {
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
                     {/* Manual Control Buttons */}
                     {selectedDeviceId && (
-                        <div className="fixed top-20 right-4 z-30 flex flex-col gap-2 items-end">
+                        <>
+                        <div className="fixed top-17 right-4 z-30 flex flex-row gap-2 items-end">
                             {/* Request Output Button */}
                             {runningLogs.length > 0 && (
                                 <button
@@ -910,6 +911,8 @@ export default function Home() {
                                 {autoPollingEnabled ? 'Live' : 'Manual'}
                             </button>
                         </div>
+                        <div className="mb-6"></div>
+                        </>
                     )}
                     {!selectedDeviceId && (
                         <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">

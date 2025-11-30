@@ -183,12 +183,26 @@ def write_file(request: FileWriteRequest):
 @app.get("/processes")
 def list_processes():
     try:
+        current_user = None
+        try:
+            current_user = psutil.Process().username()
+        except Exception:
+            pass
+
         procs = []
         for proc in psutil.process_iter(['pid', 'name', 'username', 'status', 'cpu_percent', 'memory_percent']):
             try:
+                # Filter by current user if available to reduce noise
+                if current_user and proc.info.get('username') != current_user:
+                    continue
+                    
                 procs.append(proc.info)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
+                
+        # Sort by CPU usage descending
+        procs.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
+        
         return {"processes": procs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

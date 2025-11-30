@@ -728,28 +728,22 @@ class Agent:
                     print(f"Unknown file type for startup file {startup_file}. Skipping.")
                     return
             
-            # Execute in background thread so it doesn't block agent startup
-            def run_startup():
-                try:
-                    env = os.environ.copy()
-                    env["PYTHONUNBUFFERED"] = "1"
-                    process = subprocess.Popen(
-                        command,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        env=env,
-                        cwd=os.path.dirname(os.path.abspath(__file__))
-                    )
-                    # Don't wait for completion - let it run in background
-                    print(f"Startup file {startup_file} started (PID: {process.pid})")
-                except Exception as e:
-                    print(f"Error executing startup file {startup_file}: {e}")
+            # Create a command document in Firestore so it's tracked and visible in UI
+            cmd_id = f"startup_{int(time.time())}"
+            cmd_data = {
+                'command': command,
+                'type': 'shell',
+                'status': 'pending',
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'is_startup': True
+            }
             
-            startup_thread = threading.Thread(target=run_startup)
-            startup_thread.daemon = True
-            startup_thread.start()
+            # Create the document first
+            self.doc_ref.collection('commands').document(cmd_id).set(cmd_data)
+            
+            # Execute using the standard command executor
+            print(f"Queueing startup command: {command}")
+            self.start_command(cmd_id, cmd_data)
             
         except Exception as e:
             print(f"Error checking/executing startup file: {e}")
