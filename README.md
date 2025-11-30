@@ -23,7 +23,7 @@
 
 ### Initial Setup Instructions
     
-1.  Clone this repo on the device you want to remote control.
+1.  Fork this repo and clone on the device you want to remote control.
 2.  Create a Firebase project. If you expect to use this a lot, enable the "Blaze" plan; It does take a card, but the free usage is generous and past that 100,000 reads is 3 cents.
 3.  Enable **Firestore Database** and **Storage**.
 4.  Enable **Authentication** and add the **Google** provider.
@@ -72,3 +72,6 @@
 
 ## Adding additional agents
 *   Follow the `Initial Setup Instructions` starting at **step 9** and skipping **step 10**.
+
+## Contributing
+    I would love any feature suggestions or feedback, however minimal or edge case. Make a github issue, or submit a pull request yourself to improve the app for all.
