@@ -4,9 +4,9 @@ service cloud.firestore {
     match /devices/{deviceId} {
       
       
-      // Read access: Public (empty list) or User in list
+      // Read access: User in list
       function isAllowed(data) {
-        return request.auth.token.email in data.allowed_emails;
+        return (request.auth != null && request.auth.token.email in data.allowed_emails);
       }
       
 

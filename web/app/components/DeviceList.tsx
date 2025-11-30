@@ -59,15 +59,11 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
     const devicesRef = collection(db, "devices");
 
     if (currentUserEmail) {
-        q = query(devicesRef, 
-            or(
-                where("allowed_emails", "==", []),
-                where("allowed_emails", "array-contains", currentUserEmail)
-            )
-        );
+        q = query(devicesRef, where("allowed_emails", "array-contains", currentUserEmail));
     } else {
-        // If not logged in, only show public devices
-        q = query(devicesRef, where("allowed_emails", "==", []));
+        // If not logged in, show no devices since public access is disabled
+        setDevices([]);
+        return;
     }
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
