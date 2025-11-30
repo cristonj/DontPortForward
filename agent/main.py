@@ -536,6 +536,43 @@ class Agent:
         
         return {}  # Return empty dict on failure
 
+    def cleanup_stale_commands(self):
+        """Clean up any pending or processing commands from previous runs."""
+        print("Cleaning up stale commands...")
+        try:
+            batch = db.batch()
+            commands_ref = self.doc_ref.collection('commands')
+            
+            # Find processing commands
+            processing_docs = commands_ref.where(field_path='status', op_string='==', value='processing').get()
+            count = 0
+            for doc in processing_docs:
+                batch.update(doc.reference, {
+                    'status': 'completed',
+                    'completed_at': firestore.SERVER_TIMESTAMP,
+                    'output': 'Command interrupted by agent restart.',
+                    'error': 'Agent restarted'
+                })
+                count += 1
+            
+            # Find pending commands
+            pending_docs = commands_ref.where(field_path='status', op_string='==', value='pending').get()
+            for doc in pending_docs:
+                batch.update(doc.reference, {
+                    'status': 'cancelled',
+                    'completed_at': firestore.SERVER_TIMESTAMP,
+                    'output': 'Command cancelled by agent restart.',
+                    'error': 'Agent restarted'
+                })
+                count += 1
+            
+            if count > 0:
+                batch.commit()
+                print(f"Cleaned up {count} stale commands.")
+                
+        except Exception as e:
+            print(f"Error cleaning up stale commands: {e}")
+
     def register(self):
         """Register device with retry logic for network failures."""
         max_retries = 3
@@ -561,6 +598,10 @@ class Agent:
                 }
                 
                 self.doc_ref.set(data, merge=True)
+                
+                # Cleanup stale commands after successful registration
+                self.cleanup_stale_commands()
+                
                 print(f"Device {self.device_id} registered.")
                 return  # Success
             except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded, ConnectionError) as e:
