@@ -3,43 +3,25 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /devices/{deviceId} {
       
-      function isSignedIn() {
-        return request.auth != null;
-      }
-      
-      // Common check for valid configuration
-      function hasValidConfig(data) {
-        return 'allowed_emails' in data && data.allowed_emails != null;
-      }
       
       // Read access: Public (empty list) or User in list
       function isAllowed(data) {
-        return isSignedIn() && 
-               hasValidConfig(data) && 
-               (request.auth.token.email in data.allowed_emails);
+        return request.auth.token.email in data.allowed_emails;
       }
       
-      // Write access: User must be explicitly in the list
-      function isAllowedToWrite(data) {
-        return isSignedIn() && 
-               hasValidConfig(data) && 
-               request.auth.token.email in data.allowed_emails;
-      }
 
       // Rules for the device document itself
       allow read: if isAllowed(resource.data);
       
-      allow update: if isAllowedToWrite(resource.data) && 
-                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['startup_file']);
-
+      allow update: if isAllowed(resource.data);
+     
       // Rules for the commands subcollection
       match /commands/{commandId} {
         function getDeviceData() {
           return get(/databases/$(database)/documents/devices/$(deviceId)).data;
         }
 
-        allow read, write: if exists(/databases/$(database)/documents/devices/$(deviceId)) && 
-                              isAllowed(getDeviceData());
+        allow read, write: if isAllowed(getDeviceData());
       }
     }
   }
