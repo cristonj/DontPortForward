@@ -9,7 +9,7 @@ from pathlib import Path
 # This launcher assumes it is in the 'wrapper' directory
 # and the agent is in the 'agent' directory at the same level.
 CHECK_INTERVAL = 60  # Check for updates every 60 seconds
-REBOOT_TIME = "03:00" # Reboot at 3 AM
+REBOOT_INTERVAL = 24 * 60 * 60  # Reboot once per day (24 hours in seconds)
 # Paths relative to the project root
 AGENT_SCRIPT_PATH = os.path.join("agent", "main.py")
 
@@ -47,11 +47,41 @@ def restart_program():
     print("Restarting launcher...")
     os.execv(sys.executable, ['python'] + sys.argv)
 
+def get_system_uptime():
+    """Gets system uptime in seconds. Returns 0 if unable to determine."""
+    try:
+        if sys.platform == "linux":
+            # Read /proc/uptime on Linux
+            with open("/proc/uptime", "r") as f:
+                uptime_seconds = float(f.read().split()[0])
+                return uptime_seconds
+        elif sys.platform == "win32":
+            # On Windows, use boot time from system
+            import ctypes
+            lib = ctypes.windll.kernel32
+            tick_count = lib.GetTickCount64()
+            return tick_count / 1000.0  # Convert milliseconds to seconds
+        else:
+            # For other platforms, try to use uptime command
+            try:
+                result = subprocess.run(["uptime", "-s"], capture_output=True, text=True, check=True)
+                boot_time_str = result.stdout.strip()
+                boot_time = datetime.datetime.strptime(boot_time_str, "%Y-%m-%d %H:%M:%S")
+                uptime = (datetime.datetime.now() - boot_time).total_seconds()
+                return uptime
+            except:
+                return 0
+    except Exception as e:
+        print(f"Error getting system uptime: {e}")
+        return 0
+
 def should_reboot():
-    """Checks if it's time to reboot the system."""
-    now = datetime.datetime.now()
-    current_time = now.strftime("%H:%M")
-    return current_time == REBOOT_TIME
+    """Checks if system has been up for more than 24 hours."""
+    uptime = get_system_uptime()
+    if uptime > REBOOT_INTERVAL:
+        print(f"System uptime: {uptime / 3600:.2f} hours (threshold: {REBOOT_INTERVAL / 3600} hours)")
+        return True
+    return False
 
 def run_agent(root_dir):
     """
