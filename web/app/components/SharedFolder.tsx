@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { app } from "../../lib/firebase";
+import { app, db } from "../../lib/firebase";
 import { 
   getStorage,
   ref, 
@@ -11,6 +11,7 @@ import {
   deleteObject,
   StorageReference
 } from "firebase/storage";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 
 const storage = getStorage(app);
 
@@ -50,6 +51,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   const [files, setFiles] = useState<FileItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [startupFile, setStartupFile] = useState<string | null>(null);
   
   // Create File State
   const [isCreatingFile, setIsCreatingFile] = useState(false);
@@ -74,8 +76,23 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     }
   };
 
+  const fetchStartupFile = async () => {
+    if (!deviceId) return;
+    try {
+      const deviceRef = doc(db, 'devices', deviceId);
+      const deviceSnap = await getDoc(deviceRef);
+      if (deviceSnap.exists()) {
+        const data = deviceSnap.data();
+        setStartupFile(data.startup_file || null);
+      }
+    } catch (error) {
+      console.error("Error fetching startup file:", error);
+    }
+  };
+
   useEffect(() => {
     fetchFiles();
+    fetchStartupFile();
   }, [deviceId]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -170,6 +187,29 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     const command = `python shared/${fileItem.name}`;
     if (confirm(`Run ${fileItem.name} on device?`)) {
         onRunCommand(command);
+    }
+  };
+
+  const handleSetStartupFile = async (fileItem: FileItem) => {
+    if (!deviceId) return;
+    try {
+      const deviceRef = doc(db, 'devices', deviceId);
+      if (startupFile === fileItem.name) {
+        // Unset startup file
+        await updateDoc(deviceRef, {
+          startup_file: null
+        });
+        setStartupFile(null);
+      } else {
+        // Set as startup file
+        await updateDoc(deviceRef, {
+          startup_file: fileItem.name
+        });
+        setStartupFile(fileItem.name);
+      }
+    } catch (error: any) {
+      console.error("Error setting startup file:", error);
+      alert(`Failed to set startup file: ${error?.message || 'Network error'}`);
     }
   };
 
@@ -289,10 +329,29 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                         <span className="truncate" title={file.name}>{file.name}</span>
+                        {startupFile === file.name && (
+                          <span className="text-xs text-purple-400 font-semibold" title="Runs on startup">
+                            ⚡
+                          </span>
+                        )}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
                     <div className="flex justify-end gap-1 sm:gap-2">
+                        <button
+                            onClick={() => handleSetStartupFile(file)}
+                            className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
+                              startupFile === file.name
+                                ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/20 bg-purple-900/10'
+                                : 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/20'
+                            }`}
+                            title={startupFile === file.name ? "Remove from startup" : "Set as startup file"}
+                        >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                            </svg>
+                            <span className="hidden sm:inline">{startupFile === file.name ? 'Startup' : 'Set Startup'}</span>
+                        </button>
                         {file.name.endsWith('.py') && onRunCommand && (
                             <button
                                 onClick={() => handleRunFile(file)}
@@ -338,6 +397,11 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       
       <div className="mt-3 text-xs text-gray-500">
         Files uploaded here are synced to the agent's <code className="bg-gray-800 px-1 py-0.5 rounded text-gray-300">shared/</code> folder.
+        {startupFile && (
+          <span className="ml-2 text-purple-400">
+            ⚡ Startup file: <code className="bg-gray-800 px-1 py-0.5 rounded text-purple-300">{startupFile}</code>
+          </span>
+        )}
       </div>
     </div>
   );
