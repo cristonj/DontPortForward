@@ -165,7 +165,8 @@ class FileSyncer(threading.Thread):
 class CommandExecutor(threading.Thread):
     """
     Handles the execution of a single command (shell or API) in a separate thread.
-    Captures stdout/stderr and updates Firestore in real-time.
+    Captures stdout/stderr in memory, only writes to Firestore on-demand or completion.
+    Optimized for long-running scripts to minimize Firestore writes.
     """
     def __init__(self, cmd_id, cmd_data, device_ref):
         super().__init__()
@@ -177,13 +178,11 @@ class CommandExecutor(threading.Thread):
         self.should_stop = False
         self.output_buffer = []  # List of (timestamp, line) tuples for stdout
         self.error_buffer = []   # List of (timestamp, line) tuples for stderr
-        self.last_flush = time.time()
-        self.last_output_hash = None  # Track if output has changed
+        self.last_heartbeat = time.time()
         self.kill_listener = None
-        self.flush_interval = 2.0  # Push output to Firestore every 2 seconds when there's new content
-        self.idle_flush_interval = 30.0  # Reduce to 30s when no new output
+        self.heartbeat_interval = 60.0  # Only send heartbeat every 60s (just to show command is alive)
         self.command_start_time = time.time()
-        self.max_memory_lines = 10000  # Keep last 10k lines in memory (can be large, no DB limit)
+        self.max_memory_lines = 10000  # Keep last 10k lines in memory
         self.max_output_chars = 50000  # Limit output size sent to Firestore (50KB)
 
     def _read_stream(self, stream, buffer):
@@ -311,15 +310,14 @@ class CommandExecutor(threading.Thread):
                     stderr_thread.join(timeout=1)
                     break
                 
-                # Check for new data less frequently to reduce CPU usage
-                self.flush_output()
-                time.sleep(0.5)  # Check every 0.5s instead of 0.1s
+                # Send minimal heartbeat periodically (no output, just alive signal)
+                self.send_heartbeat()
+                time.sleep(1.0)  # Check every 1s
 
             return_code = self.process.returncode
-            error_msg = "Command cancelled by user." if self.should_stop else ""
 
-            # Final status update (no output written to DB)
-            self.flush_output(force=True)
+            # Write final output once when command completes
+            self.write_final_output()
             
             update_data = {
                 'status': 'completed',
@@ -367,12 +365,30 @@ class CommandExecutor(threading.Thread):
                     del active_commands_registry[self.cmd_id]
             threading.Thread(target=cleanup, daemon=True).start()
 
-    def flush_output(self, force=False):
-        """Push output to Firestore in real-time when there are changes."""
+    def send_heartbeat(self):
+        """Send minimal heartbeat to show command is still alive. No output written."""
         current_time = time.time()
-        elapsed = current_time - self.last_flush
+        elapsed = current_time - self.last_heartbeat
         
-        # Get current output
+        # Only send heartbeat periodically to minimize writes
+        if elapsed < self.heartbeat_interval:
+            return
+        
+        # Minimal update - just timestamp and line counts (no output)
+        try:
+            self.cmd_ref.update({
+                'last_activity': firestore.SERVER_TIMESTAMP,
+                'output_lines': len(self.output_buffer),
+                'error_lines': len(self.error_buffer)
+            })
+            self.last_heartbeat = current_time
+        except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
+            print(f"[{self.cmd_id}] Network error in heartbeat (will retry): {e}")
+        except Exception as e:
+            print(f"[{self.cmd_id}] Error in heartbeat: {e}")
+    
+    def write_final_output(self):
+        """Write final output when command completes. Called once at the end."""
         stdout, stderr = self.get_all_output()
         
         # Truncate to max size (keep the end, which is most recent)
@@ -381,45 +397,20 @@ class CommandExecutor(threading.Thread):
         if len(stderr) > self.max_output_chars:
             stderr = "... (truncated)\n" + stderr[-self.max_output_chars:]
         
-        # Create a hash to detect changes
-        current_hash = hash((stdout, stderr))
-        has_changes = current_hash != self.last_output_hash
-        
-        # Determine flush interval based on whether there's new output
-        interval = self.flush_interval if has_changes else self.idle_flush_interval
-        
-        # Only update if forced, or enough time has passed
-        if not force and elapsed < interval:
-            return
-        
-        # Skip if no changes and not forced (avoid unnecessary writes)
-        if not force and not has_changes and elapsed < self.idle_flush_interval:
-            return
-        
-        # Build update data
         update_data = {
             'last_activity': firestore.SERVER_TIMESTAMP,
             'output_lines': len(self.output_buffer),
             'error_lines': len(self.error_buffer)
         }
+        if stdout:
+            update_data['output'] = stdout
+        if stderr:
+            update_data['error'] = stderr
         
-        # Include output if there are changes or if forced
-        if has_changes or force:
-            if stdout:
-                update_data['output'] = stdout
-            if stderr:
-                update_data['error'] = stderr
-            self.last_output_hash = current_hash
-        
-        # Gracefully handle network failures - don't retry here to avoid blocking
         try:
             self.cmd_ref.update(update_data)
-            self.last_flush = current_time
-        except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
-            # Network errors - log but don't fail, will retry on next flush
-            print(f"[{self.cmd_id}] Network error updating output (will retry): {e}")
         except Exception as e:
-            print(f"[{self.cmd_id}] Error updating output: {e}")
+            print(f"[{self.cmd_id}] Error writing final output: {e}")
     
     def get_recent_output(self, seconds=60):
         """Get output from the last N seconds. Returns (stdout, stderr) as strings."""

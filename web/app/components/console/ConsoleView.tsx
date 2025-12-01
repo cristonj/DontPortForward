@@ -78,7 +78,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     return [...unconfirmedOptimistic, ...serverLogs];
   }, [serverLogs, optimisticCommands]);
 
-  // Listen for command logs
+  // Listen for command logs - pause when page is hidden to reduce reads
   useEffect(() => {
     if (!deviceId || !user) {
       setServerLogs([]);
@@ -86,42 +86,73 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       return;
     }
 
-    const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-    const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
+    let unsubscribe: (() => void) | null = null;
+    let isSubscribed = false;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setServerLogs(newLogs);
+    const subscribe = () => {
+      if (isSubscribed) return;
       
-      // Clean up any optimistic commands that have been confirmed by the server
-      setOptimisticCommands(prev => {
-        if (prev.length === 0) return prev;
+      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
+
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as CommandLog));
+        setServerLogs(newLogs);
         
-        // Keep only optimistic commands that don't have a matching server entry yet
-        return prev.filter(opt => {
-          const hasMatch = newLogs.some(
-            serverLog => serverLog.command === opt.command && 
-            ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
-          );
-          return !hasMatch;
+        // Clean up any optimistic commands that have been confirmed by the server
+        setOptimisticCommands(prev => {
+          if (prev.length === 0) return prev;
+          return prev.filter(opt => {
+            const hasMatch = newLogs.some(
+              serverLog => serverLog.command === opt.command && 
+              ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+            );
+            return !hasMatch;
+          });
         });
+      }, (error) => {
+        if (error.code === 'permission-denied') {
+          console.debug("Logs permission denied (possibly logged out)");
+        } else {
+          console.error("Error fetching logs:", error);
+        }
       });
-    }, (error) => {
-      if (error.code === 'permission-denied') {
-        console.debug("Logs permission denied (possibly logged out)");
-      } else {
-        console.error("Error fetching logs:", error);
+      isSubscribed = true;
+    };
+
+    const unsubscribeListener = () => {
+      if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
       }
-    });
+      isSubscribed = false;
+    };
 
-    return () => unsubscribe();
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Page is hidden - stop listening to reduce reads
+        unsubscribeListener();
+      } else {
+        // Page is visible - resume listening
+        subscribe();
+      }
+    };
+
+    // Subscribe initially if page is visible
+    if (!document.hidden) {
+      subscribe();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribeListener();
+    };
   }, [deviceId, user]);
-
-  // Note: Auto-polling removed - the agent now pushes output automatically via Firestore
-  // Output is streamed in real-time via onSnapshot listener above
 
   const requestOutputForActiveCommands = useCallback(async () => {
     if (!deviceId || !user) return;
