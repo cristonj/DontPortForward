@@ -178,10 +178,13 @@ class CommandExecutor(threading.Thread):
         self.output_buffer = []  # List of (timestamp, line) tuples for stdout
         self.error_buffer = []   # List of (timestamp, line) tuples for stderr
         self.last_flush = time.time()
+        self.last_output_hash = None  # Track if output has changed
         self.kill_listener = None
-        self.flush_interval = 30.0  # Update status in Firestore every 30 seconds (reduced from 10s to cut DB ops by 66%)
+        self.flush_interval = 2.0  # Push output to Firestore every 2 seconds when there's new content
+        self.idle_flush_interval = 30.0  # Reduce to 30s when no new output
         self.command_start_time = time.time()
         self.max_memory_lines = 10000  # Keep last 10k lines in memory (can be large, no DB limit)
+        self.max_output_chars = 50000  # Limit output size sent to Firestore (50KB)
 
     def _read_stream(self, stream, buffer):
         try:
@@ -365,28 +368,58 @@ class CommandExecutor(threading.Thread):
             threading.Thread(target=cleanup, daemon=True).start()
 
     def flush_output(self, force=False):
-        """Update status in Firestore periodically. Output is NOT written to DB."""
+        """Push output to Firestore in real-time when there are changes."""
         current_time = time.time()
         elapsed = current_time - self.last_flush
         
-        # Only update status periodically, not output
-        if not force and elapsed < self.flush_interval:
+        # Get current output
+        stdout, stderr = self.get_all_output()
+        
+        # Truncate to max size (keep the end, which is most recent)
+        if len(stdout) > self.max_output_chars:
+            stdout = "... (truncated)\n" + stdout[-self.max_output_chars:]
+        if len(stderr) > self.max_output_chars:
+            stderr = "... (truncated)\n" + stderr[-self.max_output_chars:]
+        
+        # Create a hash to detect changes
+        current_hash = hash((stdout, stderr))
+        has_changes = current_hash != self.last_output_hash
+        
+        # Determine flush interval based on whether there's new output
+        interval = self.flush_interval if has_changes else self.idle_flush_interval
+        
+        # Only update if forced, or enough time has passed
+        if not force and elapsed < interval:
             return
         
-        # Update only status/metadata in Firestore, never output
+        # Skip if no changes and not forced (avoid unnecessary writes)
+        if not force and not has_changes and elapsed < self.idle_flush_interval:
+            return
+        
+        # Build update data
+        update_data = {
+            'last_activity': firestore.SERVER_TIMESTAMP,
+            'output_lines': len(self.output_buffer),
+            'error_lines': len(self.error_buffer)
+        }
+        
+        # Include output if there are changes or if forced
+        if has_changes or force:
+            if stdout:
+                update_data['output'] = stdout
+            if stderr:
+                update_data['error'] = stderr
+            self.last_output_hash = current_hash
+        
         # Gracefully handle network failures - don't retry here to avoid blocking
         try:
-            self.cmd_ref.update({
-                'last_activity': firestore.SERVER_TIMESTAMP,
-                'output_lines': len(self.output_buffer),
-                'error_lines': len(self.error_buffer)
-            })
+            self.cmd_ref.update(update_data)
             self.last_flush = current_time
         except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
             # Network errors - log but don't fail, will retry on next flush
-            print(f"[{self.cmd_id}] Network error updating status (will retry): {e}")
+            print(f"[{self.cmd_id}] Network error updating output (will retry): {e}")
         except Exception as e:
-            print(f"[{self.cmd_id}] Error updating status: {e}")
+            print(f"[{self.cmd_id}] Error updating output: {e}")
     
     def get_recent_output(self, seconds=60):
         """Get output from the last N seconds. Returns (stdout, stderr) as strings."""

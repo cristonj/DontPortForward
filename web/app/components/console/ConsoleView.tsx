@@ -23,7 +23,7 @@ import ActiveCommandCard from "./ActiveCommandCard";
 import HistoryCommandItem from "./HistoryCommandItem";
 import CommandInput from "./CommandInput";
 import { CommandLog } from "../../types/command";
-import { ErrorIcon, CloseIcon, WarningIcon, TerminalIcon, TrashIcon } from "../Icons";
+import { ErrorIcon, CloseIcon, TerminalIcon, TrashIcon } from "../Icons";
 import { PulsingDot } from "../ui";
 import {
   COMMAND_TYPE_SHELL,
@@ -31,12 +31,7 @@ import {
   ACTIVE_COMMAND_STATUSES,
   getCommandsCollectionPath,
   getCommandDocumentPath,
-  CONSOLE_POLLING_INTERVAL_MS,
-  CONSOLE_LAST_ACTIVITY_THRESHOLD_MS,
   CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-  CONSOLE_MAX_CONSECUTIVE_ERRORS,
-  CONSOLE_ERROR_BACKOFF_MS,
-  CONSOLE_MAX_LOGS_TO_UPDATE,
   CONSOLE_HISTORY_LIMIT,
   CONSOLE_REFRESH_DELAY_MS
 } from "../../constants";
@@ -56,8 +51,6 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
   const [errorMsg, setErrorMsg] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
-  const [showConnectionWarning, setShowConnectionWarning] = useState(false);
-  const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
   const [isRequestingOutput, setIsRequestingOutput] = useState(false);
   
   // Track pending optimistic command texts to match against server responses
@@ -127,67 +120,8 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     return () => unsubscribe();
   }, [deviceId, user]);
 
-  // Auto-polling for active commands
-  useEffect(() => {
-    if (!deviceId || !user || !autoPollingEnabled) return;
-
-    let consecutiveErrors = 0;
-    let isPollingEnabled = true;
-    let isPageVisible = true;
-
-    const handleVisibilityChange = () => {
-      isPageVisible = !document.hidden;
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    const autoRequestOutput = async () => {
-      if (!isPollingEnabled || !isPageVisible) return;
-      
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
-      if (activeLogs.length === 0) return;
-      
-      const logsToUpdate = activeLogs.slice(0, CONSOLE_MAX_LOGS_TO_UPDATE);
-      
-      for (const log of logsToUpdate) {
-        const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > CONSOLE_LAST_ACTIVITY_THRESHOLD_MS);
-        
-        if (needsUpdate) {
-          try {
-            const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
-            await updateDoc(commandRef, {
-              output_request: {
-                seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-                request_id: `${Date.now()}-${Math.random()}`
-              }
-            });
-            consecutiveErrors = 0;
-          } catch (error: unknown) {
-            consecutiveErrors++;
-            console.debug("Could not request output:", error);
-            
-            if (consecutiveErrors > CONSOLE_MAX_CONSECUTIVE_ERRORS) {
-              console.warn("Multiple polling errors detected - reducing poll frequency");
-              setShowConnectionWarning(true);
-              isPollingEnabled = false;
-              setTimeout(() => { 
-                isPollingEnabled = true;
-                setShowConnectionWarning(false);
-              }, CONSOLE_ERROR_BACKOFF_MS);
-            }
-          }
-        }
-      }
-    };
-
-    const interval = setInterval(autoRequestOutput, CONSOLE_POLLING_INTERVAL_MS);
-    autoRequestOutput();
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [deviceId, user, logs, autoPollingEnabled]);
+  // Note: Auto-polling removed - the agent now pushes output automatically via Firestore
+  // Output is streamed in real-time via onSnapshot listener above
 
   const requestOutputForActiveCommands = useCallback(async () => {
     if (!deviceId || !user) return;
@@ -396,8 +330,6 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             isRequesting={isRequestingOutput}
             onRefresh={manualRefresh}
             isRefreshing={isRefreshing}
-            autoPollingEnabled={autoPollingEnabled}
-            onToggleAutoPolling={() => setAutoPollingEnabled(!autoPollingEnabled)}
           />
         <div className="space-y-6 p-3 sm:p-4">
 
