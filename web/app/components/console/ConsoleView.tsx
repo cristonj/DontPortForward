@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { db } from "../../../lib/firebase";
 import { 
   collection, 
   query, 
   orderBy, 
-  onSnapshot, 
   addDoc, 
   serverTimestamp,
   limit,
@@ -14,7 +13,8 @@ import {
   updateDoc,
   writeBatch,
   deleteDoc,
-  getDocs
+  getDocs,
+  Timestamp
 } from "firebase/firestore";
 import { User } from "firebase/auth";
 import ConsoleToolbar from "./ConsoleToolbar";
@@ -22,7 +22,7 @@ import ActiveCommandCard from "./ActiveCommandCard";
 import HistoryCommandItem from "./HistoryCommandItem";
 import CommandInput from "./CommandInput";
 import { CommandLog } from "../../types/command";
-import { ErrorIcon, CloseIcon, WarningIcon, TerminalIcon, TrashIcon } from "../Icons";
+import { ErrorIcon, CloseIcon, TerminalIcon, TrashIcon } from "../Icons";
 import { PulsingDot } from "../ui";
 import {
   COMMAND_TYPE_SHELL,
@@ -30,16 +30,14 @@ import {
   ACTIVE_COMMAND_STATUSES,
   getCommandsCollectionPath,
   getCommandDocumentPath,
-  CONSOLE_POLLING_INTERVAL_MS,
-  CONSOLE_LAST_ACTIVITY_THRESHOLD_MS,
   CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-  CONSOLE_MAX_CONSECUTIVE_ERRORS,
-  CONSOLE_ERROR_BACKOFF_MS,
-  CONSOLE_MAX_LOGS_TO_UPDATE,
   CONSOLE_HISTORY_LIMIT,
   CONSOLE_REFRESH_DELAY_MS
 } from "../../constants";
 import { getLastLines } from "../../utils";
+
+// Prefix for optimistic command IDs to distinguish them from real Firestore IDs
+const OPTIMISTIC_ID_PREFIX = "__optimistic__";
 
 interface ConsoleViewProps {
   deviceId: string;
@@ -47,155 +45,163 @@ interface ConsoleViewProps {
 }
 
 export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
-  const [logs, setLogs] = useState<CommandLog[]>([]);
+  const [serverLogs, setServerLogs] = useState<CommandLog[]>([]);
+  const [optimisticCommands, setOptimisticCommands] = useState<CommandLog[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
-  const [showConnectionWarning, setShowConnectionWarning] = useState(false);
-  const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
   const [isRequestingOutput, setIsRequestingOutput] = useState(false);
-
-  // Listen for command logs
-  useEffect(() => {
-    if (!deviceId || !user) {
-      setLogs([]);
-      return;
-    }
-
-    const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-    const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setLogs(newLogs);
-    }, (error) => {
-      if (error.code === 'permission-denied') {
-        console.debug("Logs permission denied (possibly logged out)");
-      } else {
-        console.error("Error fetching logs:", error);
+  
+  // Track pending optimistic command texts to match against server responses
+  const pendingCommandsRef = useRef<Map<string, string>>(new Map());
+  
+  // Merge server logs with optimistic commands, removing optimistic ones that have been confirmed
+  const logs = useMemo(() => {
+    // Filter out optimistic commands that have matching server entries
+    // (meaning the server has confirmed them)
+    const unconfirmedOptimistic = optimisticCommands.filter(opt => {
+      // Check if this optimistic command's text matches any recent server command
+      const matchingServerLog = serverLogs.find(
+        serverLog => serverLog.command === opt.command && 
+        ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+      );
+      // If there's a matching server log, remove the optimistic one
+      if (matchingServerLog) {
+        pendingCommandsRef.current.delete(opt.id);
+        return false;
       }
+      return true;
     });
+    
+    // Combine: optimistic first (they're the most recent), then server logs
+    return [...unconfirmedOptimistic, ...serverLogs];
+  }, [serverLogs, optimisticCommands]);
 
-    return () => unsubscribe();
-  }, [deviceId, user]);
-
-  // Auto-polling for active commands
-  useEffect(() => {
-    if (!deviceId || !user || !autoPollingEnabled) return;
-
-    let consecutiveErrors = 0;
-    let isPollingEnabled = true;
-    let isPageVisible = true;
-
-    const handleVisibilityChange = () => {
-      isPageVisible = !document.hidden;
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    const autoRequestOutput = async () => {
-      if (!isPollingEnabled || !isPageVisible) return;
+  // Single fetch - no continuous listening, only reads when needed
+  const fetchLogs = useCallback(async (requestOutput = false) => {
+    if (!deviceId || !user) return;
+    
+    try {
+      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
+      const snapshot = await getDocs(q);
       
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
-      if (activeLogs.length === 0) return;
+      const newLogs: CommandLog[] = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      } as CommandLog));
       
-      const logsToUpdate = activeLogs.slice(0, CONSOLE_MAX_LOGS_TO_UPDATE);
+      setServerLogs(newLogs);
       
-      for (const log of logsToUpdate) {
-        const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > CONSOLE_LAST_ACTIVITY_THRESHOLD_MS);
-        
-        if (needsUpdate) {
-          try {
-            const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
-            await updateDoc(commandRef, {
+      // Clean up optimistic commands that are now on server
+      setOptimisticCommands(prev => {
+        if (prev.length === 0) return prev;
+        return prev.filter(opt => {
+          const hasMatch = newLogs.some(
+            serverLog => serverLog.command === opt.command && 
+            ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+          );
+          return !hasMatch;
+        });
+      });
+      
+      // Request output for active commands if requested
+      if (requestOutput) {
+        const activeLogs = newLogs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
+        if (activeLogs.length > 0) {
+          // Fire and forget - don't await, agent will update and we'll see it on next fetch
+          Promise.all(activeLogs.map(log => 
+            updateDoc(doc(db, ...getCommandDocumentPath(deviceId, log.id)), {
               output_request: {
                 seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
                 request_id: `${Date.now()}-${Math.random()}`
               }
-            });
-            consecutiveErrors = 0;
-          } catch (error: unknown) {
-            consecutiveErrors++;
-            console.debug("Could not request output:", error);
-            
-            if (consecutiveErrors > CONSOLE_MAX_CONSECUTIVE_ERRORS) {
-              console.warn("Multiple polling errors detected - reducing poll frequency");
-              setShowConnectionWarning(true);
-              isPollingEnabled = false;
-              setTimeout(() => { 
-                isPollingEnabled = true;
-                setShowConnectionWarning(false);
-              }, CONSOLE_ERROR_BACKOFF_MS);
-            }
-          }
+            }).catch(() => {})
+          ));
         }
+      }
+    } catch (error) {
+      console.error("Error fetching logs:", error);
+    }
+  }, [deviceId, user]);
+
+  // Fetch on mount and when page becomes visible
+  useEffect(() => {
+    if (!deviceId || !user) {
+      setServerLogs([]);
+      setOptimisticCommands([]);
+      return;
+    }
+
+    // Initial fetch with output request
+    fetchLogs(true);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        // Page visible - fetch and request output
+        fetchLogs(true);
       }
     };
 
-    const interval = setInterval(autoRequestOutput, CONSOLE_POLLING_INTERVAL_MS);
-    autoRequestOutput();
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [deviceId, user, logs, autoPollingEnabled]);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [deviceId, user, fetchLogs]);
 
   const requestOutputForActiveCommands = useCallback(async () => {
     if (!deviceId || !user) return;
     
     setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
-      if (activeLogs.length === 0) {
-        setIsRequestingOutput(false);
-        return;
-      }
-      
-      const requests = activeLogs.map(async (log) => {
-        try {
-          const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
-          await updateDoc(commandRef, {
-            output_request: {
-              seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-              request_id: `${Date.now()}-${Math.random()}`
-            }
-          });
-        } catch (error) {
-          console.debug("Could not request output for command:", log.id, error);
-        }
-      });
-      
-      await Promise.all(requests);
+      // Request output and fetch in one go
+      await fetchLogs(true);
+      // Fetch again after agent has time to respond
+      setTimeout(() => fetchLogs(false), 1000);
     } finally {
       setIsRequestingOutput(false);
     }
-  }, [deviceId, user, logs]);
+  }, [deviceId, user, fetchLogs]);
 
-  const sendCommand = useCallback(async (command: string) => {
+  const sendCommand = useCallback((command: string) => {
     if (!command.trim() || !deviceId) return;
-
-    try {
-      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-      await addDoc(commandsRef, {
-        command,
-        type: COMMAND_TYPE_SHELL,
-        status: COMMAND_STATUS_PENDING,
-        created_at: serverTimestamp()
-      });
-      setErrorMsg("");
-    } catch (error: unknown) {
+    
+    // Generate optimistic ID and create optimistic command immediately
+    const optimisticId = `${OPTIMISTIC_ID_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const optimisticCommand: CommandLog = {
+      id: optimisticId,
+      command: command.trim(),
+      status: COMMAND_STATUS_PENDING,
+      created_at: Timestamp.now(),
+    };
+    
+    // Add to optimistic commands immediately (instant UI feedback)
+    setOptimisticCommands(prev => [optimisticCommand, ...prev]);
+    pendingCommandsRef.current.set(optimisticId, command.trim());
+    setErrorMsg("");
+    
+    // Fire and forget - send to Firestore in background
+    const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+    addDoc(commandsRef, {
+      command: command.trim(),
+      type: COMMAND_TYPE_SHELL,
+      status: COMMAND_STATUS_PENDING,
+      created_at: serverTimestamp()
+    }).then(() => {
+      // Fetch after a short delay to see the command on server
+      setTimeout(() => fetchLogs(false), 500);
+    }).catch((error: unknown) => {
+      // On error, remove the optimistic command and show error
       const err = error as { message?: string };
       console.error("Error sending command:", error);
+      setOptimisticCommands(prev => prev.filter(c => c.id !== optimisticId));
+      pendingCommandsRef.current.delete(optimisticId);
       setErrorMsg(`Error: ${err?.message || "Failed to send command"}`);
-    }
-  }, [deviceId]);
+    });
+  }, [deviceId, fetchLogs]);
 
   const killCommand = useCallback(async (cmdId: string) => {
     if (!deviceId) return;
+    // Can't kill optimistic commands that haven't been sent yet
+    if (cmdId.startsWith(OPTIMISTIC_ID_PREFIX)) return;
     try {
       const commandRef = doc(db, ...getCommandDocumentPath(deviceId, cmdId));
       await updateDoc(commandRef, { kill_signal: true });
@@ -206,6 +212,13 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
 
   const deleteCommand = useCallback(async (logId: string, isActive: boolean = false) => {
     if (!deviceId) return;
+    
+    // For optimistic commands, just remove from local state
+    if (logId.startsWith(OPTIMISTIC_ID_PREFIX)) {
+      setOptimisticCommands(prev => prev.filter(c => c.id !== logId));
+      pendingCommandsRef.current.delete(logId);
+      return;
+    }
     
     const log = logs.find(l => l.id === logId);
     const commandText = log?.command || 'this task';
@@ -267,21 +280,13 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     setIsRefreshing(true);
     
     try {
-      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
-      const snapshot = await getDocs(q);
-      
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setLogs(newLogs);
-    } catch (error) {
-      console.error("Error refreshing logs:", error);
+      await fetchLogs(true);
+      // Fetch again after agent responds
+      setTimeout(() => fetchLogs(false), 1000);
     } finally {
       setTimeout(() => setIsRefreshing(false), CONSOLE_REFRESH_DELAY_MS);
     }
-  }, [deviceId, user]);
+  }, [deviceId, user, fetchLogs]);
 
   return (
     <div className="console-view flex flex-col flex-1 min-h-0">
@@ -302,23 +307,6 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
         </div>
       )}
 
-      {/* Connection Warning */}
-      {showConnectionWarning && (
-        <div className="console-warning-banner bg-amber-500/10 border-b border-amber-500/40 text-amber-400 px-4 py-2.5 text-sm flex items-center justify-between backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <WarningIcon className="w-5 h-5 shrink-0" />
-            <span>Connection issues detected. Updates temporarily reduced.</span>
-          </div>
-          <button 
-            onClick={() => setShowConnectionWarning(false)}
-            className="text-amber-400 hover:text-amber-300 ml-4 p-1 rounded hover:bg-amber-500/10 transition-colors shrink-0"
-            aria-label="Dismiss warning"
-          >
-            <CloseIcon className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {/* Terminal Output */}
       <div className="console-output flex-1 overflow-y-auto scrollbar-thin font-mono text-sm">
           <ConsoleToolbar
@@ -327,8 +315,6 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             isRequesting={isRequestingOutput}
             onRefresh={manualRefresh}
             isRefreshing={isRefreshing}
-            autoPollingEnabled={autoPollingEnabled}
-            onToggleAutoPolling={() => setAutoPollingEnabled(!autoPollingEnabled)}
           />
         <div className="space-y-6 p-3 sm:p-4">
 
@@ -364,6 +350,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
                     onKill={killCommand}
                     onDelete={(id) => deleteCommand(id, true)}
                     getLastLines={getLastLines}
+                    isOptimistic={log.id.startsWith(OPTIMISTIC_ID_PREFIX)}
                   />
                 ))}
               </div>

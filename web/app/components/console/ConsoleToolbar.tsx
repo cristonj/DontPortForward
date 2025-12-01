@@ -8,8 +8,6 @@ interface ConsoleToolbarProps {
   isRequesting: boolean;
   onRefresh: () => void;
   isRefreshing: boolean;
-  autoPollingEnabled: boolean;
-  onToggleAutoPolling: () => void;
   className?: string;
 }
 
@@ -19,13 +17,8 @@ export default function ConsoleToolbar({
   isRequesting,
   onRefresh,
   isRefreshing,
-  autoPollingEnabled: _autoPollingEnabled,
-  onToggleAutoPolling: _onToggleAutoPolling,
   className = "",
 }: ConsoleToolbarProps) {
-  // Note: autoPollingEnabled and onToggleAutoPolling reserved for future auto-polling toggle UI
-  void _autoPollingEnabled;
-  void _onToggleAutoPolling;
   return (
     <div className={`console-toolbar sticky top-0 z-20 bg-gray-950/70 backdrop-blur-xl border-b border-gray-800/50 shadow-[0_8px_32px_rgba(0,0,0,0.4)] ${className}`}>
       <div className="px-3 sm:px-4 py-3 flex flex-col gap-3">
