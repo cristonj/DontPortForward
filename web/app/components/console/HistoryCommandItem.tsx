@@ -4,6 +4,7 @@ import SwipeToDeleteLogItem from "../SwipeToDeleteLogItem";
 import LogOutput from "../LogOutput";
 import { CommandLog } from "../../types/command";
 import { RefreshIcon, ChevronDownIcon } from "../Icons";
+import { StatusBadge } from "../ui";
 
 interface HistoryCommandItemProps {
   log: CommandLog;
@@ -22,9 +23,7 @@ export default function HistoryCommandItem({
   onRunAgain,
   getLastLines,
 }: HistoryCommandItemProps) {
-  const statusColor = log.status === "completed" 
-    ? "bg-terminal-success" 
-    : "bg-terminal-error";
+  const statusColor = log.status === "completed" ? "bg-terminal-success" : "bg-terminal-error";
 
   return (
     <SwipeToDeleteLogItem
@@ -60,13 +59,7 @@ export default function HistoryCommandItem({
               </button>
               
               {/* Status badge */}
-              <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                log.status === 'completed' 
-                  ? 'text-terminal-success/70 bg-terminal-success/10' 
-                  : 'text-terminal-error/70 bg-terminal-error/10'
-              }`}>
-                {log.status}
-              </span>
+              <StatusBadge status={log.status} />
               
               {/* Expand chevron */}
               <ChevronDownIcon 

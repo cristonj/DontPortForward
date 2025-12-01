@@ -16,6 +16,8 @@ import DeviceList from "./components/DeviceList";
 import ConsoleView from "./components/console/ConsoleView";
 import type { Device } from "./types";
 import { isDeviceConnected } from "./utils";
+import { MenuIcon, LogoutIcon, RefreshIcon, ArrowRightIcon } from "./components/Icons";
+import { LoadingSpinner, PulsingDot } from "./components/ui";
 
 const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
@@ -164,7 +166,7 @@ export default function Home() {
     return (
       <div className="h-dvh w-screen flex items-center justify-center bg-black text-gray-500 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-terminal-accent/30 border-t-terminal-accent rounded-full animate-spin" />
+          <LoadingSpinner size="lg" />
           <span>Loading...</span>
         </div>
       </div>
@@ -218,9 +220,7 @@ export default function Home() {
     mainContent = (
       <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
         <div className="w-16 h-16 border-2 border-gray-700 rounded-xl flex items-center justify-center">
-          <svg className="w-8 h-8 text-terminal-accent/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
+          <ArrowRightIcon className="w-8 h-8 text-terminal-accent/50" />
         </div>
         <p className="text-gray-500">Select a device from the menu to connect.</p>
       </div>
@@ -271,9 +271,7 @@ export default function Home() {
               onClick={handleLogout}
               className="w-full text-left text-xs text-terminal-error hover:text-red-300 hover:bg-terminal-error/10 p-2 rounded-lg transition-colors flex items-center gap-2"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+              <LogoutIcon className="w-3.5 h-3.5" />
               Sign Out
             </button>
           </div>
@@ -291,9 +289,7 @@ export default function Home() {
               onClick={() => setIsSidebarOpen(true)}
               aria-label="Toggle Menu"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
+              <MenuIcon className="w-5 h-5" />
             </button>
             
             <div className="flex flex-col min-w-0">
@@ -308,9 +304,11 @@ export default function Home() {
                 <span className={`text-[10px] leading-none mt-1 truncate flex items-center gap-1 ${
                   isDeviceConnected(selectedDevice.last_seen) ? 'text-terminal-success' : 'text-red-400'
                 }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${
-                    isDeviceConnected(selectedDevice.last_seen) ? 'bg-terminal-success animate-pulse' : 'bg-red-500'
-                  }`} />
+                  <PulsingDot 
+                    size="sm" 
+                    color={isDeviceConnected(selectedDevice.last_seen) ? 'success' : 'error'} 
+                    pulse={isDeviceConnected(selectedDevice.last_seen)} 
+                  />
                   {isDeviceConnected(selectedDevice.last_seen) ? 'Connected' : 'Not Connected'}
                 </span>
               )}
@@ -344,9 +342,7 @@ export default function Home() {
                   className="p-2 text-gray-400 hover:text-terminal-error hover:bg-terminal-error/10 rounded-lg transition-colors"
                   title="Restart Agent"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
+                  <RefreshIcon className="w-4 h-4" />
                 </button>
               </>
             )}

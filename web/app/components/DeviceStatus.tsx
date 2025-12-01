@@ -11,6 +11,7 @@ import {
   getDeviceDocumentPath
 } from "../constants";
 import { isDeviceConnected, getRelativeTime, formatDate, formatUptime, isNetworkError } from "../utils";
+import { PulsingDot, LoadingState } from "./ui";
 
 interface DeviceStatusProps {
   deviceId: string;
@@ -86,7 +87,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   };
 
   if (!deviceId) return <div className="h-full flex items-center justify-center text-gray-500">Select a device to view status.</div>;
-  if (loading) return <div className="h-full flex items-center justify-center text-gray-500 animate-pulse">Loading device status...</div>;
+  if (loading) return <LoadingState message="Loading device status..." />;
   if (!device) return <div className="h-full flex items-center justify-center text-red-500">Device not found.</div>;
 
   const connected = isDeviceConnected(device.last_seen);
@@ -130,20 +131,17 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
                   }`}>
                     {device.mode === 'sleep' ? (
                       <>
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                        </span>
+                        <PulsingDot size="sm" color="accent" />
                         Sleeping
                       </>
                     ) : connected ? (
                       <>
-                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                        <PulsingDot size="sm" color="success" />
                         Connected
                       </>
                     ) : (
                       <>
-                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                        <PulsingDot size="sm" color="error" pulse={false} />
                         Disconnected
                       </>
                     )}

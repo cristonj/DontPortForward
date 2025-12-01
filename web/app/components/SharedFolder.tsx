@@ -18,7 +18,7 @@ import {
   getSharedFolderPath,
   getSharedFilePath
 } from "../constants";
-import { withRetry } from "../utils";
+import { withRetry, getErrorMessage } from "../utils";
 import { RefreshIcon, PlusIcon, UploadIcon, CloseIcon, FileIcon, SparkleIcon, PlayIcon, TrashIcon, EditIcon } from "./Icons";
 
 const storage = getStorage(app);
@@ -91,8 +91,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       await fetchFiles();
     } catch (error) {
       console.error("Error uploading file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to upload file: ${errorMessage}`);
+      alert(`Failed to upload file: ${getErrorMessage(error, 'Network error')}`);
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -117,8 +116,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setNewFileContent("");
     } catch (error) {
       console.error("Error creating file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to create file: ${errorMessage}`);
+      alert(`Failed to create file: ${getErrorMessage(error, 'Network error')}`);
     } finally {
       setUploading(false);
     }
@@ -142,8 +140,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setIsCreatingFile(true);
     } catch (error) {
       console.error("Error loading file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to load file: ${errorMessage}`);
+      alert(`Failed to load file: ${getErrorMessage(error, 'Network error')}`);
     }
   };
 
@@ -153,8 +150,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       window.open(url, '_blank');
     } catch (error) {
       console.error("Error downloading file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to download file: ${errorMessage}`);
+      alert(`Failed to download file: ${getErrorMessage(error, 'Network error')}`);
     }
   };
 
@@ -165,8 +161,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       await fetchFiles();
     } catch (error) {
       console.error("Error deleting file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to delete file: ${errorMessage}`);
+      alert(`Failed to delete file: ${getErrorMessage(error, 'Network error')}`);
     }
   };
 
@@ -197,8 +192,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       }
     } catch (error) {
       console.error("Error setting startup file:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Network error';
-      alert(`Failed to set startup file: ${errorMessage}`);
+      alert(`Failed to set startup file: ${getErrorMessage(error, 'Network error')}`);
     }
   };
 
