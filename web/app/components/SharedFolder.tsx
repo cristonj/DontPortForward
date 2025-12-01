@@ -72,8 +72,11 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   };
 
   useEffect(() => {
-    fetchFiles();
-    fetchStartupFile();
+    if (deviceId) {
+      fetchFiles();
+      fetchStartupFile();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,9 +88,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       const storageRef = ref(storage, getSharedFilePath(deviceId, file.name));
       await withRetry(() => uploadBytes(storageRef, file));
       await fetchFiles();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error uploading file:", error);
-      alert(`Failed to upload file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to upload file: ${errorMessage}`);
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -110,9 +114,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setIsCreatingFile(false);
       setNewFileName("");
       setNewFileContent("");
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error creating file:", error);
-      alert(`Failed to create file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to create file: ${errorMessage}`);
     } finally {
       setUploading(false);
     }
@@ -134,9 +139,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setNewFileName(fileItem.name);
       setNewFileContent(text);
       setIsCreatingFile(true);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error loading file:", error);
-      alert(`Failed to load file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to load file: ${errorMessage}`);
     }
   };
 
@@ -144,9 +150,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     try {
       const url = await withRetry(() => getDownloadURL(fileItem.ref));
       window.open(url, '_blank');
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error downloading file:", error);
-      alert(`Failed to download file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to download file: ${errorMessage}`);
     }
   };
 
@@ -155,9 +162,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     try {
       await withRetry(() => deleteObject(fileItem.ref));
       await fetchFiles();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error deleting file:", error);
-      alert(`Failed to delete file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to delete file: ${errorMessage}`);
     }
   };
 
@@ -186,9 +194,10 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
         });
         setStartupFile(fileItem.name);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error setting startup file:", error);
-      alert(`Failed to set startup file: ${error?.message || 'Network error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Network error';
+      alert(`Failed to set startup file: ${errorMessage}`);
     }
   };
 
@@ -375,7 +384,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       </div>
       
       <div className="mt-3 text-xs text-gray-500">
-        Files uploaded here are synced to the agent's <code className="bg-gray-800 px-1 py-0.5 rounded text-gray-300">shared/</code> folder.
+        Files uploaded here are synced to the agent&apos;s <code className="bg-gray-800 px-1 py-0.5 rounded text-gray-300">shared/</code> folder.
         {startupFile && (
           <span className="ml-2 text-purple-400">
             ⚡ Startup file: <code className="bg-gray-800 px-1 py-0.5 rounded text-purple-300">{startupFile}</code>

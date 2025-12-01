@@ -1,8 +1,9 @@
 // Command types
 export const COMMAND_TYPE_SHELL = "shell" as const;
 export const COMMAND_TYPE_API = "api" as const;
+export const COMMAND_TYPE_RESTART = "restart" as const;
 
-export type CommandType = typeof COMMAND_TYPE_SHELL | typeof COMMAND_TYPE_API;
+export type CommandType = typeof COMMAND_TYPE_SHELL | typeof COMMAND_TYPE_API | typeof COMMAND_TYPE_RESTART;
 
 // Command statuses
 export const COMMAND_STATUS_PENDING = "pending" as const;

@@ -47,6 +47,8 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
     });
 
     return () => unsub();
+    // localPollingRate intentionally excluded - only set on first load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
 
   // Update relative time at configured interval

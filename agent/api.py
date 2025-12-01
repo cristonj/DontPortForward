@@ -12,7 +12,11 @@ import socket
 # This avoids circular import issues
 active_commands_registry = {}
 
-app = FastAPI()
+app = FastAPI(
+    title="DontPortForward Agent API",
+    description="Local API for the DontPortForward agent - provides system status, command execution, and file management",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,

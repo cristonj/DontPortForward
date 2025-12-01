@@ -76,7 +76,7 @@ try:
     db = firestore.client()
 except Exception as e:
     print(f"Error initializing Firebase: {e}")
-    pass
+    raise
 
 def start_api():
     """Starts the FastAPI server."""

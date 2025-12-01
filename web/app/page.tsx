@@ -10,20 +10,12 @@ import {
   doc,
   onSnapshot,
 } from "firebase/firestore";
-import type { Timestamp } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import dynamic from 'next/dynamic';
 import DeviceList from "./components/DeviceList";
 import ConsoleView from "./components/console/ConsoleView";
 import type { Device } from "./types";
-
-// Helper to check if device is connected (seen within last 5 minutes)
-const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
-  if (!lastSeen) return false;
-  const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-  return lastSeenDate.getTime() > fiveMinutesAgo;
-};
+import { isDeviceConnected } from "./utils";
 
 const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
@@ -86,6 +78,8 @@ export default function Home() {
   // Subscribe to selected device data
   useEffect(() => {
     if (!selectedDeviceId) {
+      // Clear selected device when no device is selected - intentional synchronous state clear
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedDevice(null);
       return;
     }

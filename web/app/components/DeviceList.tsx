@@ -40,19 +40,23 @@ const DefaultIcon = () => (
 );
 
 export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "", currentUserEmail }: DeviceListProps) {
+  // Start with empty devices if no user email
   const [devices, setDevices] = useState<Device[]>([]);
 
+  // Reset devices when user logs out
+  const effectiveEmail = currentUserEmail || null;
+  
   useEffect(() => {
-    let q;
-    const devicesRef = collection(db, "devices");
-
-    if (currentUserEmail) {
-        q = query(devicesRef, where("allowed_emails", "array-contains", currentUserEmail));
-    } else {
-        // If not logged in, show no devices since public access is disabled
-        setDevices([]);
-        return;
+    // If not logged in, show no devices since public access is disabled
+    if (!effectiveEmail) {
+      // Clear devices when user logs out - this is intentional synchronous state clear
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDevices([]);
+      return;
     }
+
+    const devicesRef = collection(db, "devices");
+    const q = query(devicesRef, where("allowed_emails", "array-contains", effectiveEmail));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const deviceList = snapshot.docs.map(doc => ({
@@ -68,7 +72,7 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
     });
 
     return () => unsubscribe();
-  }, [currentUserEmail]);
+  }, [effectiveEmail]);
 
   const getIcon = (platform?: string) => {
     if (!platform) return <DefaultIcon />;

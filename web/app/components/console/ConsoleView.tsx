@@ -96,7 +96,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     const autoRequestOutput = async () => {
       if (!isPollingEnabled || !isPageVisible) return;
       
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
       if (activeLogs.length === 0) return;
       
       const logsToUpdate = activeLogs.slice(0, CONSOLE_MAX_LOGS_TO_UPDATE);
@@ -147,7 +147,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     
     setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
       if (activeLogs.length === 0) {
         setIsRequestingOutput(false);
         return;
@@ -221,12 +221,12 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
   }, [deviceId, logs]);
 
   const runningLogs = useMemo(() => 
-    logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
+    logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status)), 
     [logs]
   );
   
   const historyLogs = useMemo(() => 
-    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
+    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status)), 
     [logs]
   );
 

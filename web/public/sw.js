@@ -1,13 +1,14 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 self.addEventListener('install', (event) => {
-  // console.log('Service Worker installing.');
+  // Service Worker installing
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  // console.log('Service Worker activating.');
+  // Service Worker activating
 });
 
 self.addEventListener('fetch', (event) => {
-  // console.log('Fetching:', event.request.url);
   // Add caching logic here if needed for offline support
+  // event.respondWith() can be used to cache responses
 });
