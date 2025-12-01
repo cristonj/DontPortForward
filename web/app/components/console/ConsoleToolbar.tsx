@@ -45,9 +45,9 @@ export default function ConsoleToolbar({
           <button
             onClick={onRequestOutput}
             disabled={runningCount === 0 || isRequesting}
-            className={`toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
+            className={`toolbar-button bg-blue-500/60 text-black border border-gray-800/50 cursor-not-allowed opacity-60 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
               runningCount === 0 || isRequesting
-                ? "bg-blue-600/80 text-black border border-gray-800/50 cursor-not-allowed opacity-60"
+                ? "bg-blue-600/60 text-black border border-gray-800/50 cursor-not-allowed opacity-60"
                 : "toolbar-button-primary"
             }`}
             title="Request output for active commands"
