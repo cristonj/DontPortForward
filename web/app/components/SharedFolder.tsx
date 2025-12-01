@@ -12,6 +12,13 @@ import {
 } from "firebase/storage";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import type { FileItem } from "../types";
+import { 
+  MAX_FILE_SIZE_FOR_EDIT, 
+  PYTHON_RUN_COMMAND_PREFIX,
+  getSharedFolderPath,
+  getSharedFilePath
+} from "../constants";
+import { withRetry } from "../utils";
 
 const storage = getStorage(app);
 
@@ -20,26 +27,6 @@ interface SharedFolderProps {
   onRunCommand?: (command: string) => void;
 }
 
-// Retry helper for network operations
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error: any) {
-      const isNetworkError = error?.code === 'storage/network-request-failed' || 
-                            error?.code === 'unavailable' ||
-                            error?.message?.includes('network') ||
-                            error?.message?.includes('fetch');
-      
-      if (isNetworkError && attempt < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('Retry failed');
-}
 
 export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -56,7 +43,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     if (!deviceId) return;
     setLoading(true);
     try {
-      const listRef = ref(storage, `agents/${deviceId}/shared`);
+      const listRef = ref(storage, getSharedFolderPath(deviceId));
       const res = await withRetry(() => listAll(listRef));
       setFiles(res.items.map((itemRef) => ({
         name: itemRef.name,
@@ -95,7 +82,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     
     setUploading(true);
     try {
-      const storageRef = ref(storage, `agents/${deviceId}/shared/${file.name}`);
+      const storageRef = ref(storage, getSharedFilePath(deviceId, file.name));
       await withRetry(() => uploadBytes(storageRef, file));
       await fetchFiles();
     } catch (error: any) {
@@ -117,7 +104,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     setUploading(true);
     try {
       const blob = new Blob([newFileContent], { type: 'text/plain' });
-      const storageRef = ref(storage, `agents/${deviceId}/shared/${newFileName}`);
+      const storageRef = ref(storage, getSharedFilePath(deviceId, newFileName));
       await withRetry(() => uploadBytes(storageRef, blob));
       await fetchFiles();
       setIsCreatingFile(false);
@@ -132,8 +119,6 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   };
 
   const handleEditFile = async (fileItem: FileItem) => {
-    const MAX_SIZE = 1024 * 1024; // 1MB limit
-    
     try {
       const url = await withRetry(() => getDownloadURL(fileItem.ref));
       const response = await fetch(url);
@@ -141,7 +126,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       
       const text = await response.text();
-      if (text.length > MAX_SIZE) {
+      if (text.length > MAX_FILE_SIZE_FOR_EDIT) {
         alert("File is too large to edit in the browser.");
         return;
       }
@@ -178,7 +163,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
 
   const handleRunFile = (fileItem: FileItem) => {
     if (!onRunCommand) return;
-    const command = `python shared/${fileItem.name}`;
+    const command = `${PYTHON_RUN_COMMAND_PREFIX}${fileItem.name}`;
     if (confirm(`Run ${fileItem.name} on device?`)) {
         onRunCommand(command);
     }

@@ -3,8 +3,8 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
-import type { Timestamp } from "firebase/firestore";
 import type { Device } from "../types";
+import { isDeviceConnected } from "../utils";
 
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;
@@ -12,14 +12,6 @@ interface DeviceListProps {
   className?: string;
   currentUserEmail?: string | null;
 }
-
-// Helper to check if device is connected (seen within last 5 minutes)
-const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
-  if (!lastSeen) return false;
-  const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-  return lastSeenDate.getTime() > fiveMinutesAgo;
-};
 
 const WindowsIcon = () => (
   <svg viewBox="0 0 88 88" className="w-5 h-5 text-blue-400 shrink-0" fill="currentColor">

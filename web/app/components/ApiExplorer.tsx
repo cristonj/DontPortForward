@@ -3,21 +3,17 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
-import type { ApiEndpoint } from "../types";
-
-const ENDPOINTS: ApiEndpoint[] = [
-  { path: "/status", method: "GET", description: "Get full system status including hardware stats and git info" },
-  { path: "/health", method: "GET", description: "Simple health check endpoint" },
-  { path: "/exec", method: "POST", description: "Execute a shell command", defaultBody: '{\n  "command": "ls -la",\n  "cwd": "."\n}' },
-  { path: "/files/list", method: "GET", description: "List files in a directory (use ?path=/path/to/dir in real request, here defaults to current)" },
-  { path: "/files/read", method: "POST", description: "Read a file content", defaultBody: '{\n  "path": "README.md"\n}' },
-  { path: "/files/write", method: "POST", description: "Write content to a file", defaultBody: '{\n  "path": "test.txt",\n  "content": "Hello world!"\n}' },
-  { path: "/processes", method: "GET", description: "List running processes" },
-  { path: "/processes/{pid}", method: "DELETE", description: "Kill a process (replace {pid} in path - not supported in this UI yet, requires manual implementation)" },
-];
+import { 
+  API_ENDPOINTS, 
+  API_COMMAND_TYPE, 
+  DEFAULT_MAX_RETRIES, 
+  RETRY_BASE_DELAY_MS,
+  getCommandsCollectionPath
+} from "../constants";
+import { isNetworkError } from "../utils";
 
 export default function ApiExplorer({ deviceId }: { deviceId: string }) {
-  const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint>(ENDPOINTS[0]);
+  const [selectedEndpoint, setSelectedEndpoint] = useState(API_ENDPOINTS[0]);
   const [requestBody, setRequestBody] = useState("");
   const [response, setResponse] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -53,7 +49,7 @@ db = firestore.client()
 device_id = "${deviceId}"
 
 command = {
-    'type': 'api',
+    'type': '${API_COMMAND_TYPE}',
     'endpoint': '${selectedEndpoint.path}',
     'method': '${selectedEndpoint.method}',
     'body': ${pythonBody}, 
@@ -132,14 +128,13 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
       }
 
       // Retry logic for sending API command
-      const maxRetries = 3;
       let docRef: any = null;
       
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
+      for (let attempt = 0; attempt < DEFAULT_MAX_RETRIES; attempt++) {
         try {
-          const commandsRef = collection(db, "devices", deviceId, "commands");
+          const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
           docRef = await addDoc(commandsRef, {
-            type: 'api',
+            type: API_COMMAND_TYPE,
             endpoint: selectedEndpoint.path,
             method: selectedEndpoint.method,
             body: bodyData,
@@ -148,14 +143,9 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
           });
           break; // Success
         } catch (error: any) {
-          const isNetworkError = error?.code === 'unavailable' || 
-                                error?.code === 'deadline-exceeded' ||
-                                error?.message?.includes('network') ||
-                                error?.message?.includes('fetch');
-          
-          if (isNetworkError && attempt < maxRetries - 1) {
-            const waitTime = Math.pow(2, attempt) * 1000;
-            console.log(`Network error sending API command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          if (isNetworkError(error) && attempt < DEFAULT_MAX_RETRIES - 1) {
+            const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
+            console.log(`Network error sending API command (attempt ${attempt + 1}/${DEFAULT_MAX_RETRIES}), retrying in ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
           } else {
             throw error; // Re-throw to be caught by outer catch
@@ -167,7 +157,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
         throw new Error("Failed to create command after retries");
       }
 
-      const unsubscribe = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (snap) => {
+      const unsubscribe = onSnapshot(doc(db, ...getCommandDocumentPath(deviceId, docRef.id)), (snap) => {
         const data = snap.data();
         if (data?.status === 'completed') {
           if (data.error) {
@@ -205,7 +195,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
             Endpoints
           </div>
           <div className="overflow-y-auto flex-1 p-2 space-y-1">
-            {ENDPOINTS.map((ep) => (
+            {API_ENDPOINTS.map((ep) => (
               <button
                 key={ep.path}
                 onClick={() => setSelectedEndpoint(ep)}

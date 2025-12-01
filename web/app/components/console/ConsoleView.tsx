@@ -22,6 +22,22 @@ import ActiveCommandCard from "./ActiveCommandCard";
 import HistoryCommandItem from "./HistoryCommandItem";
 import CommandInput from "./CommandInput";
 import { CommandLog } from "../../types/command";
+import {
+  COMMAND_TYPE_SHELL,
+  COMMAND_STATUS_PENDING,
+  ACTIVE_COMMAND_STATUSES,
+  getCommandsCollectionPath,
+  getCommandDocumentPath,
+  CONSOLE_POLLING_INTERVAL_MS,
+  CONSOLE_LAST_ACTIVITY_THRESHOLD_MS,
+  CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
+  CONSOLE_MAX_CONSECUTIVE_ERRORS,
+  CONSOLE_ERROR_BACKOFF_MS,
+  CONSOLE_MAX_LOGS_TO_UPDATE,
+  CONSOLE_HISTORY_LIMIT,
+  CONSOLE_REFRESH_DELAY_MS
+} from "../../constants";
+import { getLastLines } from "../../utils";
 
 interface ConsoleViewProps {
   deviceId: string;
@@ -44,8 +60,8 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       return;
     }
 
-    const commandsRef = collection(db, "devices", deviceId, "commands");
-    const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
+    const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+    const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
@@ -80,21 +96,21 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     const autoRequestOutput = async () => {
       if (!isPollingEnabled || !isPageVisible) return;
       
-      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
       if (activeLogs.length === 0) return;
       
-      const logsToUpdate = activeLogs.slice(0, 2);
+      const logsToUpdate = activeLogs.slice(0, CONSOLE_MAX_LOGS_TO_UPDATE);
       
       for (const log of logsToUpdate) {
         const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 30000);
+          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > CONSOLE_LAST_ACTIVITY_THRESHOLD_MS);
         
         if (needsUpdate) {
           try {
-            const commandRef = doc(db, "devices", deviceId, "commands", log.id);
+            const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
             await updateDoc(commandRef, {
               output_request: {
-                seconds: 60,
+                seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
                 request_id: `${Date.now()}-${Math.random()}`
               }
             });
@@ -103,21 +119,21 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             consecutiveErrors++;
             console.debug("Could not request output:", error);
             
-            if (consecutiveErrors > 5) {
+            if (consecutiveErrors > CONSOLE_MAX_CONSECUTIVE_ERRORS) {
               console.warn("Multiple polling errors detected - reducing poll frequency");
               setShowConnectionWarning(true);
               isPollingEnabled = false;
               setTimeout(() => { 
                 isPollingEnabled = true;
                 setShowConnectionWarning(false);
-              }, 60000);
+              }, CONSOLE_ERROR_BACKOFF_MS);
             }
           }
         }
       }
     };
 
-    const interval = setInterval(autoRequestOutput, 30000);
+    const interval = setInterval(autoRequestOutput, CONSOLE_POLLING_INTERVAL_MS);
     autoRequestOutput();
 
     return () => {
@@ -131,7 +147,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     
     setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
       if (activeLogs.length === 0) {
         setIsRequestingOutput(false);
         return;
@@ -139,10 +155,10 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       
       const requests = activeLogs.map(async (log) => {
         try {
-          const commandRef = doc(db, "devices", deviceId, "commands", log.id);
+          const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
           await updateDoc(commandRef, {
             output_request: {
-              seconds: 60,
+              seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
               request_id: `${Date.now()}-${Math.random()}`
             }
           });
@@ -161,11 +177,11 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     if (!command.trim() || !deviceId) return;
 
     try {
-      const commandsRef = collection(db, "devices", deviceId, "commands");
+      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
       await addDoc(commandsRef, {
         command,
-        type: 'shell',
-        status: 'pending',
+        type: COMMAND_TYPE_SHELL,
+        status: COMMAND_STATUS_PENDING,
         created_at: serverTimestamp()
       });
       setErrorMsg("");
@@ -179,7 +195,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
   const killCommand = useCallback(async (cmdId: string) => {
     if (!deviceId) return;
     try {
-      const commandRef = doc(db, "devices", deviceId, "commands", cmdId);
+      const commandRef = doc(db, ...getCommandDocumentPath(deviceId, cmdId));
       await updateDoc(commandRef, { kill_signal: true });
     } catch (error) {
       console.error("Error killing command:", error);
@@ -198,19 +214,19 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     if (!confirm(confirmMessage)) return;
     
     try {
-      await deleteDoc(doc(db, "devices", deviceId, "commands", logId));
+      await deleteDoc(doc(db, ...getCommandDocumentPath(deviceId, logId)));
     } catch (error) {
       console.error("Error deleting command:", error);
     }
   }, [deviceId, logs]);
 
   const runningLogs = useMemo(() => 
-    logs.filter(log => ['pending', 'processing'].includes(log.status)), 
+    logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
     [logs]
   );
   
   const historyLogs = useMemo(() => 
-    logs.filter(log => !['pending', 'processing'].includes(log.status)), 
+    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
     [logs]
   );
 
@@ -221,7 +237,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     try {
       const batch = writeBatch(db);
       historyLogs.forEach(log => {
-        const docRef = doc(db, "devices", deviceId, "commands", log.id);
+        const docRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
         batch.delete(docRef);
       });
       await batch.commit();
@@ -249,8 +265,8 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     setIsRefreshing(true);
     
     try {
-      const commandsRef = collection(db, "devices", deviceId, "commands");
-      const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
+      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
       const snapshot = await getDocs(q);
       
       const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
@@ -261,16 +277,9 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     } catch (error) {
       console.error("Error refreshing logs:", error);
     } finally {
-      setTimeout(() => setIsRefreshing(false), 500);
+      setTimeout(() => setIsRefreshing(false), CONSOLE_REFRESH_DELAY_MS);
     }
   }, [deviceId, user]);
-
-  const getLastLines = useCallback((text: string | undefined, maxLines: number = 10): string => {
-    if (!text) return '';
-    const lines = text.split('\n');
-    if (lines.length <= maxLines) return text;
-    return lines.slice(-maxLines).join('\n');
-  }, []);
 
   return (
     <div className="console-view flex flex-col flex-1 min-h-0">
