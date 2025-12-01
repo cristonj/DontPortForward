@@ -8,22 +8,16 @@ import {
   listAll, 
   uploadBytes, 
   getDownloadURL, 
-  deleteObject,
-  StorageReference
+  deleteObject
 } from "firebase/storage";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
+import type { FileItem } from "../types";
 
 const storage = getStorage(app);
 
 interface SharedFolderProps {
   deviceId: string;
   onRunCommand?: (command: string) => void;
-}
-
-interface FileItem {
-  name: string;
-  fullPath: string;
-  ref: StorageReference;
 }
 
 // Retry helper for network operations

@@ -3,13 +3,7 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
-
-interface ApiEndpoint {
-  path: string;
-  method: string;
-  description: string;
-  defaultBody?: string;
-}
+import type { ApiEndpoint } from "../types";
 
 const ENDPOINTS: ApiEndpoint[] = [
   { path: "/status", method: "GET", description: "Get full system status including hardware stats and git info" },

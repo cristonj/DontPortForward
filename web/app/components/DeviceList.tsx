@@ -2,21 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
-import { collection, onSnapshot, query, where, or } from "firebase/firestore";
-
-interface Device {
-  id: string;
-  hostname: string;
-  ip: string;
-  status: string;
-  platform?: string;
-  last_seen: any;
-  stats?: {
-    cpu_percent: number;
-    memory_percent: number;
-  };
-  allowed_emails?: string[];
-}
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+import type { Device } from "../types";
 
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;

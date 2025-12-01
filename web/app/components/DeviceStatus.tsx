@@ -3,36 +3,8 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
-
-interface GitInfo {
-  branch: string;
-  commit: string;
-  is_dirty: boolean;
-  last_commit_date: string;
-}
-
-interface DeviceStats {
-  cpu_percent: number;
-  memory_percent: number;
-  disk_percent: number;
-  boot_time: number;
-}
-
-interface Device {
-  id: string;
-  hostname: string;
-  ip: string;
-  status: string;
-  platform: string;
-  release: string;
-  version: string;
-  last_seen: any;
-  stats?: DeviceStats;
-  git?: GitInfo;
-  mode?: string;
-  polling_rate?: number;
-  sleep_polling_rate?: number;
-}
+import type { Timestamp } from "firebase/firestore";
+import type { Device } from "../types";
 
 interface DeviceStatusProps {
   deviceId: string;
@@ -107,15 +79,22 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   if (loading) return <div className="h-full flex items-center justify-center text-gray-500 animate-pulse">Loading device status...</div>;
   if (!device) return <div className="h-full flex items-center justify-center text-red-500">Device not found.</div>;
 
-  const formatDate = (timestamp: any) => {
+  const formatDate = (timestamp: Timestamp | Date | number | string | null | undefined) => {
       if (!timestamp) return "Unknown";
-      if (typeof timestamp.toDate === 'function') {
-          return timestamp.toDate().toLocaleString();
+      if (timestamp instanceof Date) {
+          return timestamp.toLocaleString();
       }
-      return new Date(timestamp).toLocaleString();
+      if (
+        typeof timestamp === 'object' &&
+        'toDate' in timestamp &&
+        typeof (timestamp as Timestamp).toDate === 'function'
+      ) {
+          return (timestamp as Timestamp).toDate().toLocaleString();
+      }
+      return new Date(timestamp as number | string).toLocaleString();
   };
   
-  const formatUptime = (bootTime: number) => {
+  const formatUptime = (bootTime?: number | null) => {
       if (!bootTime) return "Unknown";
       const now = Date.now() / 1000;
       const uptimeSeconds = now - bootTime;
@@ -124,6 +103,10 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
       const minutes = Math.floor((uptimeSeconds % 3600) / 60);
       return `${days}d ${hours}h ${minutes}m`;
   };
+
+  const cpuPercent = device.stats?.cpu_percent ?? 0;
+  const memoryPercent = device.stats?.memory_percent ?? 0;
+  const diskPercent = device.stats?.disk_percent ?? 0;
 
   return (
     <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 pb-20 sm:pb-6">
@@ -227,34 +210,36 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
                   <div>
                       <div className="flex justify-between text-xs uppercase tracking-wide mb-1.5">
                           <span className="text-gray-500">CPU Usage</span>
-                          <span className="text-gray-200 font-mono">{device.stats?.cpu_percent.toFixed(1)}%</span>
+                          <span className="text-gray-200 font-mono">{cpuPercent.toFixed(1)}%</span>
                       </div>
                       <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                           <div className={`h-full rounded-full transition-all duration-500 ${
-                              (device.stats?.cpu_percent || 0) > 80 ? 'bg-red-500' : 'bg-blue-500'
-                          }`} style={{ width: `${device.stats?.cpu_percent || 0}%` }}></div>
+                              cpuPercent > 80 ? 'bg-red-500' : 'bg-blue-500'
+                          }`} style={{ width: `${cpuPercent}%` }}></div>
                       </div>
                   </div>
                   <div>
                       <div className="flex justify-between text-xs uppercase tracking-wide mb-1.5">
                           <span className="text-gray-500">Memory Usage</span>
-                          <span className="text-gray-200 font-mono">{device.stats?.memory_percent.toFixed(1)}%</span>
+                          <span className="text-gray-200 font-mono">{memoryPercent.toFixed(1)}%</span>
                       </div>
                       <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                           <div className={`h-full rounded-full transition-all duration-500 ${
-                              (device.stats?.memory_percent || 0) > 80 ? 'bg-red-500' : 'bg-purple-500'
-                          }`} style={{ width: `${device.stats?.memory_percent || 0}%` }}></div>
+                              memoryPercent > 80 ? 'bg-red-500' : 'bg-purple-500'
+                          }`} style={{ width: `${memoryPercent}%` }}></div>
                       </div>
                   </div>
                   <div>
                       <div className="flex justify-between text-xs uppercase tracking-wide mb-1.5">
                           <span className="text-gray-500">Disk Usage</span>
-                          <span className="text-gray-200 font-mono">{device.stats?.disk_percent.toFixed(1)}%</span>
+                          <span className="text-gray-200 font-mono">
+                            {device.stats?.disk_percent !== undefined ? diskPercent.toFixed(1) + "%" : "N/A"}
+                          </span>
                       </div>
                       <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                           <div className={`h-full rounded-full transition-all duration-500 ${
-                              (device.stats?.disk_percent || 0) > 90 ? 'bg-red-500' : 'bg-yellow-500'
-                          }`} style={{ width: `${device.stats?.disk_percent || 0}%` }}></div>
+                              diskPercent > 90 ? 'bg-red-500' : 'bg-yellow-500'
+                          }`} style={{ width: `${diskPercent}%` }}></div>
                       </div>
                   </div>
               </div>

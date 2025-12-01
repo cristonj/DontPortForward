@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, ReactNode } from "react";
+import Image from "next/image";
 import { db, auth } from "../lib/firebase";
 import { 
   collection, 
@@ -19,7 +20,10 @@ import {
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import dynamic from 'next/dynamic';
 import DeviceList from "./components/DeviceList";
-import SwipeToDeleteLogItem from "./components/SwipeToDeleteLogItem";
+import ConsoleToolbar from "./components/console/ConsoleToolbar";
+import ActiveCommandCard from "./components/console/ActiveCommandCard";
+import HistoryCommandItem from "./components/console/HistoryCommandItem";
+import { CommandLog } from "./types/command";
 
 const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
@@ -30,19 +34,6 @@ const SharedFolder = dynamic(() => import('./components/SharedFolder'), {
 const ApiExplorer = dynamic(() => import('./components/ApiExplorer'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading API explorer...</div>
 });
-
-interface CommandLog {
-  id: string;
-  command: string;
-  output?: string;
-  error?: string;
-  status: 'pending' | 'processing' | 'completed' | 'cancelled';
-  created_at: any;
-  completed_at?: any;
-  last_activity?: any;
-  output_lines?: number;
-  error_lines?: number;
-}
 
 const SUGGESTED_COMMANDS = [
   "ls -la",
@@ -60,33 +51,6 @@ const SUGGESTED_COMMANDS = [
   "uname -a",
   "top -b -n 1"
 ];
-
-// Memoized log output component to prevent expensive re-renders
-const LogOutput = memo(({ text, isError = false }: { text: string; isError?: boolean }) => {
-  const lines = useMemo(() => text.split('\n'), [text]);
-  const maxLines = 10;
-  const displayLines = useMemo(() => {
-    if (lines.length <= maxLines) return lines;
-    return lines.slice(-maxLines);
-  }, [lines, maxLines]);
-  
-  return (
-    <pre className={`whitespace-pre-wrap break-all leading-relaxed ${isError ? 'text-red-400/80' : ''}`}>
-      {displayLines.map((line, idx) => (
-        <div key={idx} className={isError ? 'hover:bg-red-900/10' : 'hover:bg-gray-800/30'}>
-          <span className="text-gray-600 select-none mr-3 inline-block w-8 text-right">
-            {displayLines.length - maxLines + idx + 1 > 0 ? displayLines.length - maxLines + idx + 1 : idx + 1}
-          </span>
-          <span>{line || ' '}</span>
-        </div>
-      ))}
-    </pre>
-  );
-}, (prevProps, nextProps) => {
-  // Custom comparison function: only re-render if text or isError changed
-  return prevProps.text === nextProps.text && prevProps.isError === nextProps.isError;
-});
-LogOutput.displayName = 'LogOutput';
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
@@ -635,6 +599,198 @@ export default function Home() {
     [logs]
   );
 
+  let mainContent: ReactNode;
+
+  if (viewMode === 'files') {
+    mainContent = (
+      <SharedFolder 
+        deviceId={selectedDeviceId} 
+        onRunCommand={(cmd) => sendCommand(undefined, cmd)}
+      />
+    );
+  } else if (viewMode === 'api') {
+    mainContent = <ApiExplorer deviceId={selectedDeviceId} />;
+  } else if (viewMode === 'status') {
+    mainContent = <DeviceStatus deviceId={selectedDeviceId} />;
+  } else {
+    mainContent = (
+      <div className="flex flex-col h-full">
+        {/* Error Banner */}
+        {errorMsg && (
+          <div className="bg-red-500/10 border-b border-red-500/50 text-red-400 px-4 py-2 text-sm flex items-center justify-between">
+            <span>{errorMsg}</span>
+            <button 
+              onClick={() => setErrorMsg("")}
+              className="text-red-400 hover:text-red-300 ml-4"
+              aria-label="Dismiss error"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+        {showConnectionWarning && (
+          <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>Connection issues detected. Check if a browser extension is blocking Firestore requests. Updates temporarily reduced.</span>
+            </div>
+            <button 
+              onClick={() => setShowConnectionWarning(false)}
+              className="text-yellow-400 hover:text-yellow-300 ml-4 shrink-0"
+              aria-label="Dismiss warning"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+        {/* Terminal Output */}
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
+            <div className="space-y-6">
+            {selectedDeviceId && (
+              <ConsoleToolbar
+                runningCount={runningLogs.length}
+                onRequestOutput={requestOutputForActiveCommands}
+                isRequesting={isRequestingOutput}
+                onRefresh={manualRefresh}
+                isRefreshing={isRefreshing}
+                autoPollingEnabled={autoPollingEnabled}
+                onToggleAutoPolling={() => setAutoPollingEnabled(!autoPollingEnabled)}
+                className="-mx-3 sm:-mx-4"
+              />
+            )}
+            {!selectedDeviceId && (
+                <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
+                    <div className="w-12 h-12 border-2 border-gray-700 rounded-lg flex items-center justify-center">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" /></svg>
+                    </div>
+                    <p>Select a device from the menu to connect.</p>
+                </div>
+            )}
+            
+            {selectedDeviceId && logs.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-gray-600">
+                     <p>Ready. Enter a command to begin.</p>
+                </div>
+            )}
+            
+            {/* Running Processes Section */}
+            {selectedDeviceId && runningLogs.length > 0 && (
+                <div className="space-y-3 pb-2">
+                    <div className="bg-gray-950/80 backdrop-blur-sm py-2 -mt-2 border-b border-blue-500/20">
+                        <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold flex items-center gap-2">
+                            <span className="relative flex h-3 w-3">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                            </span>
+                            Active Processes ({runningLogs.length})
+                            <span className="ml-auto text-[10px] text-blue-400/50 normal-case tracking-normal">Real-time updates</span>
+                        </h3>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                        {runningLogs.map(log => (
+                            <ActiveCommandCard
+                                key={log.id}
+                                log={log}
+                                onKill={killCommand}
+                                onDelete={(id) => deleteCommand(id, true)}
+                                getLastLines={getLastLines}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Recent History Section */}
+            {selectedDeviceId && historyLogs.length > 0 && (
+                <div className="space-y-3 pt-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-xs uppercase tracking-wider text-gray-500 font-bold">
+                            Recent History
+                        </h3>
+                        <button
+                            onClick={handleClearHistory}
+                            className="text-[10px] text-gray-500 hover:text-red-400 uppercase tracking-wider transition-colors flex items-center gap-1 hover:bg-red-500/10 px-2 py-1 rounded"
+                        >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            Clear
+                        </button>
+                    </div>
+                    <div className="space-y-2">
+                        {historyLogs.map(log => (
+                            <HistoryCommandItem
+                                key={log.id}
+                                log={log}
+                                isExpanded={expandedLogs.has(log.id)}
+                                onToggle={toggleLogExpansion}
+                                onDelete={(id) => deleteCommand(id, false)}
+                                onRunAgain={(command) => sendCommand(undefined, command)}
+                                getLastLines={getLastLines}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+        </div>
+
+        {/* Input Area */}
+        <div className="bg-gray-900 p-3 border-t border-gray-800 shrink-0 relative z-20 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+            
+            {/* Suggestions Popup */}
+            {showSuggestions && (
+                <div className="absolute bottom-full left-3 mb-2 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl overflow-hidden w-64 max-h-48 overflow-y-auto z-50">
+                    {suggestions.map((suggestion, index) => (
+                        <div 
+                            key={suggestion}
+                            className={`px-4 py-2.5 cursor-pointer text-sm font-mono border-b border-gray-700/50 last:border-0 ${
+                                index === suggestionIndex ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+                            }`}
+                            onClick={() => {
+                                setInputCommand(suggestion);
+                                setShowSuggestions(false);
+                            }}
+                        >
+                            {suggestion}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <form onSubmit={sendCommand} className="flex gap-2 items-end max-w-4xl mx-auto">
+                <div className="relative flex-1 bg-gray-950 border border-gray-700 rounded-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500/20 transition-all flex items-center">
+                    <span className="pl-3 text-blue-500 select-none font-bold">{'>'}</span>
+                    <input
+                        type="text"
+                        value={inputCommand}
+                        onChange={handleInputChange}
+                        onKeyDown={handleKeyDown}
+                        className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 font-mono text-sm py-3 pl-2 pr-3 disabled:opacity-50"
+                        placeholder={selectedDeviceId ? "Enter command..." : "Select a device first"}
+                        autoFocus
+                        disabled={!selectedDeviceId}
+                        autoComplete="off"
+                    />
+                </div>
+                <button 
+                    type="submit"
+                    disabled={!inputCommand.trim() || !selectedDeviceId}
+                    className="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 rounded-lg text-white font-medium transition-colors shadow-lg shadow-blue-900/20 flex items-center justify-center"
+                >
+                   <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+                </button>
+            </form>
+        </div>
+      </div>
+    </div>
+    );
+  }
+
   if (authLoading) {
       return <div className="h-screen w-screen flex items-center justify-center bg-black text-gray-500">Loading...</div>;
   }
@@ -665,7 +821,7 @@ export default function Home() {
   }
 
   return (
-    <main className="flex h-[100dvh] bg-black text-gray-200 font-mono overflow-hidden relative selection:bg-gray-800">
+    <main className="flex h-dvh bg-black text-gray-200 font-mono overflow-hidden relative selection:bg-gray-800">
       
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
@@ -690,7 +846,7 @@ export default function Home() {
              <div className="p-4 border-t border-gray-800 bg-gray-900/50">
                  <div className="flex items-center gap-3 mb-2">
                      {user.photoURL && (
-                         <img 
+                         <Image 
                            src={user.photoURL} 
                            alt="User" 
                            width={32}
@@ -808,378 +964,7 @@ export default function Home() {
           </header>
 
           {/* Main Content Area */}
-          {viewMode === 'console' ? (
-              <>
-                {/* Error Banner */}
-                {errorMsg && (
-                  <div className="bg-red-500/10 border-b border-red-500/50 text-red-400 px-4 py-2 text-sm flex items-center justify-between">
-                    <span>{errorMsg}</span>
-                    <button 
-                      onClick={() => setErrorMsg("")}
-                      className="text-red-400 hover:text-red-300 ml-4"
-                      aria-label="Dismiss error"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                {showConnectionWarning && (
-                  <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                      <span>Connection issues detected. Check if a browser extension is blocking Firestore requests. Updates temporarily reduced.</span>
-                    </div>
-                    <button 
-                      onClick={() => setShowConnectionWarning(false)}
-                      className="text-yellow-400 hover:text-yellow-300 ml-4 shrink-0"
-                      aria-label="Dismiss warning"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                {/* Terminal Output */}
-                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
-                    {/* Manual Control Buttons */}
-                    {selectedDeviceId && (
-                        <>
-                        <div className="fixed top-17 right-4 z-30 flex flex-row gap-2 items-end">
-                            {/* Request Output Button */}
-                            {runningLogs.length > 0 && (
-                                <button
-                                    onClick={requestOutputForActiveCommands}
-                                    disabled={isRequestingOutput}
-                                    className="bg-blue-600/90 hover:bg-blue-500 backdrop-blur-sm border border-blue-500/50 text-white px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium disabled:opacity-50"
-                                    title="Request output for active commands"
-                                >
-                                    <svg 
-                                        className={`w-4 h-4 ${isRequestingOutput ? 'animate-spin' : ''}`} 
-                                        fill="none" 
-                                        stroke="currentColor" 
-                                        viewBox="0 0 24 24"
-                                    >
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                    </svg>
-                                    {isRequestingOutput ? 'Requesting...' : 'Request Output'}
-                                </button>
-                            )}
-                            
-                            {/* Refresh Logs Button */}
-                            <button
-                                onClick={manualRefresh}
-                                disabled={isRefreshing}
-                                className="bg-gray-800/90 hover:bg-gray-700 backdrop-blur-sm border border-gray-700 text-gray-300 px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium disabled:opacity-50"
-                                title="Refresh command logs"
-                            >
-                                <svg 
-                                    className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} 
-                                    fill="none" 
-                                    stroke="currentColor" 
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                                {isRefreshing ? 'Refreshing...' : 'Refresh Logs'}
-                            </button>
-                            
-                            {/* Auto-Polling Toggle */}
-                            <button
-                                onClick={() => setAutoPollingEnabled(!autoPollingEnabled)}
-                                className={`backdrop-blur-sm border px-3 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2 text-xs font-medium ${
-                                    autoPollingEnabled
-                                        ? 'bg-green-600/90 hover:bg-green-500 border-green-500/50 text-white'
-                                        : 'bg-gray-800/90 hover:bg-gray-700 border-gray-700 text-gray-300'
-                                }`}
-                                title={autoPollingEnabled ? 'Disable auto-polling' : 'Enable auto-polling (updates every 30s)'}
-                            >
-                                <span className="relative flex h-2 w-2">
-                                    {autoPollingEnabled ? (
-                                        <>
-                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                                        </>
-                                    ) : (
-                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500"></span>
-                                    )}
-                                </span>
-                                {autoPollingEnabled ? 'Live' : 'Manual'}
-                            </button>
-                        </div>
-                        <div className="mb-6"></div>
-                        </>
-                    )}
-                    {!selectedDeviceId && (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
-                            <div className="w-12 h-12 border-2 border-gray-700 rounded-lg flex items-center justify-center">
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" /></svg>
-                            </div>
-                            <p>Select a device from the menu to connect.</p>
-                        </div>
-                    )}
-                    
-                    {selectedDeviceId && logs.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-600">
-                             <p>Ready. Enter a command to begin.</p>
-                        </div>
-                    )}
-                    
-                    {/* Running Processes Section */}
-                    {selectedDeviceId && runningLogs.length > 0 && (
-                        <div className="space-y-3 pb-2">
-                            <div className="sticky top-0 bg-gray-950/95 backdrop-blur-sm z-10 py-2 -mt-2 border-b border-blue-500/20">
-                                <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold flex items-center gap-2">
-                                    <span className="relative flex h-3 w-3">
-                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                                        <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-                                    </span>
-                                    Active Processes ({runningLogs.length})
-                                    <span className="ml-auto text-[10px] text-blue-400/50 normal-case tracking-normal">Real-time updates</span>
-                                </h3>
-                            </div>
-                            <div className="grid grid-cols-1 gap-3">
-                                {runningLogs.map(log => (
-                                    <div key={log.id} className="bg-gradient-to-br from-gray-900/60 to-gray-900/40 border border-blue-500/30 rounded-lg p-4 shadow-xl backdrop-blur-sm relative group overflow-hidden">
-                                        {/* Animated border effect */}
-                                        <div className="absolute inset-0 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-500/0 via-blue-500/10 to-blue-500/0"></div>
-                                        </div>
-                                        
-                                        <div className="flex justify-between items-start mb-3 relative z-10">
-                                            <div className="flex flex-col flex-1 min-w-0">
-                                                <div className="font-bold text-white text-base mb-1 break-all">{log.command}</div>
-                                                <div className="text-xs text-blue-300/70 font-mono flex items-center gap-2 flex-wrap">
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-                                                        </svg>
-                                                        {log.id.substring(0, 8)}
-                                                    </span>
-                                                    <span>•</span>
-                                                    <span className="uppercase">{log.status}</span>
-                                                </div>
-                                            </div>
-                                            <div className="ml-3 flex items-center gap-2">
-                                                <button 
-                                                    onClick={() => killCommand(log.id)}
-                                                    className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
-                                                >
-                                                    <span className="w-2 h-2 bg-red-500 rounded-sm animate-pulse"></span>
-                                                    Kill
-                                                </button>
-                                                <button 
-                                                    onClick={() => deleteCommand(log.id, true)}
-                                                    className="px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-600/30 transition-all flex items-center gap-1.5 hover:scale-105 active:scale-95"
-                                                    title="Delete task"
-                                                >
-                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                    </svg>
-                                                    Delete
-                                                </button>
-                                            </div>
-                                        </div>
-                                        
-                                        {/* Output Preview for Active Process - Last 10 lines */}
-                                        <div className="bg-black/50 rounded p-3 font-mono text-xs text-gray-300 max-h-96 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-600 hover:scrollbar-thumb-gray-500 scrollbar-track-gray-900/50 border border-gray-800/50" style={{ scrollBehavior: 'smooth' }}>
-                                            {(log.output || log.error) ? (
-                                                <div className="space-y-1">
-                                                    {log.output && (
-                                                        <div>
-                                                            <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
-                                                                Output (Last 10 lines)
-                                                            </div>
-                                                            <LogOutput text={getLastLines(log.output, 10)} />
-                                                        </div>
-                                                    )}
-                                                    {log.error && (
-                                                        <div className="mt-2">
-                                                            <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                            <LogOutput text={getLastLines(log.error, 10)} isError={true} />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ) : (
-                                                <div className="flex items-center justify-center h-32">
-                                                    <div className="text-center">
-                                                        <div className="inline-block w-3 h-3 bg-blue-500 rounded-full animate-pulse mb-2"></div>
-                                                        <div className="text-gray-500 italic text-xs">Waiting for output...</div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Recent History Section */}
-                    {selectedDeviceId && historyLogs.length > 0 && (
-                        <div className="space-y-3 pt-4">
-                            <div className="flex justify-between items-center mb-2">
-                                <h3 className="text-xs uppercase tracking-wider text-gray-500 font-bold">
-                                    Recent History
-                                </h3>
-                                <button
-                                    onClick={handleClearHistory}
-                                    className="text-[10px] text-gray-500 hover:text-red-400 uppercase tracking-wider transition-colors flex items-center gap-1 hover:bg-red-500/10 px-2 py-1 rounded"
-                                >
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    Clear
-                                </button>
-                            </div>
-                            <div className="space-y-2">
-                                {historyLogs.map(log => {
-                                    const isExpanded = expandedLogs.has(log.id);
-                                    return (
-                                    <SwipeToDeleteLogItem 
-                                        key={log.id} 
-                                        onDelete={() => deleteCommand(log.id, false)}
-                                        onClick={() => toggleLogExpansion(log.id)}
-                                        isExpanded={isExpanded}
-                                    >
-                                        <div className="flex items-start gap-3">
-                                            <div className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${
-                                                log.status === 'completed' ? 'bg-green-500/50' : 'bg-red-500/50'
-                                            }`} />
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-center mb-1">
-                                                    <span className="font-mono text-sm text-gray-300 break-all">{log.command}</span>
-                                                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                sendCommand(undefined, log.command);
-                                                            }}
-                                                            className="text-gray-500 hover:text-white p-1 rounded hover:bg-gray-800 transition-colors"
-                                                            title="Rerun"
-                                                        >
-                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                                        </button>
-                                                        <span className="text-[10px] text-gray-600 uppercase tracking-wider">{log.status}</span>
-                                                        <svg 
-                                                            className={`w-4 h-4 text-gray-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
-                                                            fill="none" 
-                                                            stroke="currentColor" 
-                                                            viewBox="0 0 24 24"
-                                                        >
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                                        </svg>
-                                                    </div>
-                                                </div>
-                                                {/* Output preview or full view */}
-                                                {(log.output || log.error) && (
-                                                    <div className={`mt-2 font-mono ${
-                                                        isExpanded 
-                                                        ? 'text-xs bg-black/30 p-3 rounded border border-gray-800/50 max-h-96 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-600 hover:scrollbar-thumb-gray-500 scrollbar-track-gray-900/50' 
-                                                        : 'text-xs line-clamp-2 pl-2 border-l-2 border-gray-800 text-gray-500'
-                                                    }`} style={isExpanded ? { scrollBehavior: 'smooth' } : undefined}>
-                                                        {isExpanded ? (
-                                                            <div className="space-y-2">
-                                                                {log.output && (
-                                                                    <div>
-                                                                        <div className="text-blue-400/60 text-[10px] mb-1 uppercase tracking-wider">
-                                                                            Output (Last 10 lines)
-                                                                        </div>
-                                                                        <LogOutput text={getLastLines(log.output, 10)} />
-                                                                    </div>
-                                                                )}
-                                                                {log.error && (
-                                                                    <div>
-                                                                        <div className="text-red-400/60 text-[10px] mb-1 uppercase tracking-wider">Error</div>
-                                                                        <LogOutput text={getLastLines(log.error, 10)} isError={true} />
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        ) : (
-                                                            <>
-                                                                {log.output && (
-                                                                    <span>{log.output.substring(0, 150)}</span>
-                                                                )}
-                                                                {log.error && (
-                                                                    <span className="text-red-500/70 block mt-1">
-                                                                        {log.error.substring(0, 150)}
-                                                                    </span>
-                                                                )}
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </SwipeToDeleteLogItem>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
-                </div>
-
-                {/* Input Area */}
-                <div className="bg-gray-900 p-3 border-t border-gray-800 shrink-0 relative z-20 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-                    
-                    {/* Suggestions Popup */}
-                    {showSuggestions && (
-                        <div className="absolute bottom-full left-3 mb-2 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl overflow-hidden w-64 max-h-48 overflow-y-auto z-50">
-                            {suggestions.map((suggestion, index) => (
-                                <div 
-                                    key={suggestion}
-                                    className={`px-4 py-2.5 cursor-pointer text-sm font-mono border-b border-gray-700/50 last:border-0 ${
-                                        index === suggestionIndex ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
-                                    }`}
-                                    onClick={() => {
-                                        setInputCommand(suggestion);
-                                        setShowSuggestions(false);
-                                    }}
-                                >
-                                    {suggestion}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <form onSubmit={sendCommand} className="flex gap-2 items-end max-w-4xl mx-auto">
-                        <div className="relative flex-1 bg-gray-950 border border-gray-700 rounded-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500/20 transition-all flex items-center">
-                            <span className="pl-3 text-blue-500 select-none font-bold">{'>'}</span>
-                            <input
-                                type="text"
-                                value={inputCommand}
-                                onChange={handleInputChange}
-                                onKeyDown={handleKeyDown}
-                                className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 font-mono text-sm py-3 pl-2 pr-3 disabled:opacity-50"
-                                placeholder={selectedDeviceId ? "Enter command..." : "Select a device first"}
-                                autoFocus
-                                disabled={!selectedDeviceId}
-                                autoComplete="off"
-                            />
-                        </div>
-                        <button 
-                            type="submit"
-                            disabled={!inputCommand.trim() || !selectedDeviceId}
-                            className="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 rounded-lg text-white font-medium transition-colors shadow-lg shadow-blue-900/20 flex items-center justify-center"
-                        >
-                           <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
-                        </button>
-                    </form>
-                </div>
-              </>
-          ) : viewMode === 'files' ? (
-              <SharedFolder 
-                deviceId={selectedDeviceId} 
-                onRunCommand={(cmd) => sendCommand(undefined, cmd)}
-              />
-          ) : viewMode === 'api' ? (
-              <ApiExplorer deviceId={selectedDeviceId} />
-          ) : (
-              <DeviceStatus deviceId={selectedDeviceId} />
-          )}
+          {mainContent}
       </div>
     </main>
   );
