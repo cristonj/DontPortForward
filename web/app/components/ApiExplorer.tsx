@@ -3,7 +3,14 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
-import { API_ENDPOINTS, API_COMMAND_TYPE, DEFAULT_MAX_RETRIES, RETRY_BASE_DELAY_MS } from "../constants";
+import { 
+  API_ENDPOINTS, 
+  API_COMMAND_TYPE, 
+  DEFAULT_MAX_RETRIES, 
+  RETRY_BASE_DELAY_MS,
+  getCommandsCollectionPath
+} from "../constants";
+import { isNetworkError } from "../utils";
 
 export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState(API_ENDPOINTS[0]);
@@ -125,7 +132,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
       
       for (let attempt = 0; attempt < DEFAULT_MAX_RETRIES; attempt++) {
         try {
-          const commandsRef = collection(db, "devices", deviceId, "commands");
+          const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
           docRef = await addDoc(commandsRef, {
             type: API_COMMAND_TYPE,
             endpoint: selectedEndpoint.path,
@@ -136,12 +143,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
           });
           break; // Success
         } catch (error: any) {
-          const isNetworkError = error?.code === 'unavailable' || 
-                                error?.code === 'deadline-exceeded' ||
-                                error?.message?.includes('network') ||
-                                error?.message?.includes('fetch');
-          
-          if (isNetworkError && attempt < DEFAULT_MAX_RETRIES - 1) {
+          if (isNetworkError(error) && attempt < DEFAULT_MAX_RETRIES - 1) {
             const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
             console.log(`Network error sending API command (attempt ${attempt + 1}/${DEFAULT_MAX_RETRIES}), retrying in ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -155,7 +157,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
         throw new Error("Failed to create command after retries");
       }
 
-      const unsubscribe = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (snap) => {
+      const unsubscribe = onSnapshot(doc(db, ...getCommandDocumentPath(deviceId, docRef.id)), (snap) => {
         const data = snap.data();
         if (data?.status === 'completed') {
           if (data.error) {

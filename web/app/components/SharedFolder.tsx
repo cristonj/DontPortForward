@@ -16,10 +16,9 @@ import {
   MAX_FILE_SIZE_FOR_EDIT, 
   PYTHON_RUN_COMMAND_PREFIX,
   getSharedFolderPath,
-  getSharedFilePath,
-  DEFAULT_MAX_RETRIES,
-  RETRY_BASE_DELAY_MS
+  getSharedFilePath
 } from "../constants";
+import { withRetry } from "../utils";
 
 const storage = getStorage(app);
 
@@ -28,26 +27,6 @@ interface SharedFolderProps {
   onRunCommand?: (command: string) => void;
 }
 
-// Retry helper for network operations
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = DEFAULT_MAX_RETRIES): Promise<T> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error: any) {
-      const isNetworkError = error?.code === 'storage/network-request-failed' || 
-                            error?.code === 'unavailable' ||
-                            error?.message?.includes('network') ||
-                            error?.message?.includes('fetch');
-      
-      if (isNetworkError && attempt < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * RETRY_BASE_DELAY_MS));
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('Retry failed');
-}
 
 export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderProps) {
   const [files, setFiles] = useState<FileItem[]>([]);

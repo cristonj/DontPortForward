@@ -3,53 +3,18 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
-import type { Timestamp } from "firebase/firestore";
 import type { Device } from "../types";
 import { 
-  DEVICE_CONNECTION_TIMEOUT_MS, 
   RELATIVE_TIME_UPDATE_INTERVAL_MS,
   DEVICE_STATUS_MAX_RETRIES,
-  RETRY_BASE_DELAY_MS
+  RETRY_BASE_DELAY_MS,
+  getDeviceDocumentPath
 } from "../constants";
+import { isDeviceConnected, getRelativeTime, formatDate, formatUptime, isNetworkError } from "../utils";
 
 interface DeviceStatusProps {
   deviceId: string;
 }
-
-// Helper to check if device is connected (seen within configured timeout)
-const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
-  if (!lastSeen) return false;
-  const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
-  const timeoutAgo = Date.now() - DEVICE_CONNECTION_TIMEOUT_MS;
-  return lastSeenDate.getTime() > timeoutAgo;
-};
-
-// Helper to get relative time string
-const getRelativeTime = (timestamp: Timestamp | Date | number | string | null | undefined): string => {
-  if (!timestamp) return "Never";
-  
-  let date: Date;
-  if (timestamp instanceof Date) {
-    date = timestamp;
-  } else if (typeof timestamp === 'object' && 'toDate' in timestamp && typeof (timestamp as Timestamp).toDate === 'function') {
-    date = (timestamp as Timestamp).toDate();
-  } else {
-    date = new Date(timestamp as number | string);
-  }
-  
-  const now = Date.now();
-  const diff = now - date.getTime();
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-  
-  if (seconds < 30) return "Just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  return `${days}d ago`;
-};
 
 export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   const [device, setDevice] = useState<Device | null>(null);
@@ -63,7 +28,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
         return;
     }
 
-    const unsub = onSnapshot(doc(db, "devices", deviceId), (doc) => {
+    const unsub = onSnapshot(doc(db, ...getDeviceDocumentPath(deviceId)), (doc) => {
         if (doc.exists()) {
             const data = doc.data() as Omit<Device, 'id'>;
             setDevice({ id: doc.id, ...data });
@@ -99,23 +64,18 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
       if (!device || localPollingRate === null) return;
       for (let attempt = 0; attempt < DEVICE_STATUS_MAX_RETRIES; attempt++) {
         try {
-          await updateDoc(doc(db, "devices", deviceId), {
+          await updateDoc(doc(db, ...getDeviceDocumentPath(deviceId)), {
               polling_rate: localPollingRate
           });
           return; // Success
         } catch (error: unknown) {
-          const err = error as { code?: string; message?: string };
-          const isNetworkError = err?.code === 'unavailable' || 
-                                err?.code === 'deadline-exceeded' ||
-                                err?.message?.includes('network') ||
-                                err?.message?.includes('fetch');
-          
-          if (isNetworkError && attempt < DEVICE_STATUS_MAX_RETRIES - 1) {
+          if (isNetworkError(error) && attempt < DEVICE_STATUS_MAX_RETRIES - 1) {
             const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
             console.log(`Network error updating polling rate (attempt ${attempt + 1}/${DEVICE_STATUS_MAX_RETRIES}), retrying in ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
           } else {
             console.error("Error updating polling rate:", error);
+            const err = error as { message?: string };
             alert(`Failed to update polling rate${attempt === DEVICE_STATUS_MAX_RETRIES - 1 ? ` after ${DEVICE_STATUS_MAX_RETRIES} attempts` : ''}: ${err?.message || 'Network error'}`);
             return;
           }
@@ -126,31 +86,6 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   if (!deviceId) return <div className="h-full flex items-center justify-center text-gray-500">Select a device to view status.</div>;
   if (loading) return <div className="h-full flex items-center justify-center text-gray-500 animate-pulse">Loading device status...</div>;
   if (!device) return <div className="h-full flex items-center justify-center text-red-500">Device not found.</div>;
-
-  const formatDate = (timestamp: Timestamp | Date | number | string | null | undefined) => {
-      if (!timestamp) return "Unknown";
-      if (timestamp instanceof Date) {
-          return timestamp.toLocaleString();
-      }
-      if (
-        typeof timestamp === 'object' &&
-        'toDate' in timestamp &&
-        typeof (timestamp as Timestamp).toDate === 'function'
-      ) {
-          return (timestamp as Timestamp).toDate().toLocaleString();
-      }
-      return new Date(timestamp as number | string).toLocaleString();
-  };
-  
-  const formatUptime = (bootTime?: number | null) => {
-      if (!bootTime) return "Unknown";
-      const now = Date.now() / 1000;
-      const uptimeSeconds = now - bootTime;
-      const days = Math.floor(uptimeSeconds / (3600 * 24));
-      const hours = Math.floor((uptimeSeconds % (3600 * 24)) / 3600);
-      const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-      return `${days}d ${hours}h ${minutes}m`;
-  };
 
   const connected = isDeviceConnected(device.last_seen);
   const cpuPercent = device.stats?.cpu_percent ?? 0;
