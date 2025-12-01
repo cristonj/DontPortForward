@@ -5,17 +5,23 @@ import { db } from "../../lib/firebase";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
 import type { Device } from "../types";
+import { 
+  DEVICE_CONNECTION_TIMEOUT_MS, 
+  RELATIVE_TIME_UPDATE_INTERVAL_MS,
+  DEVICE_STATUS_MAX_RETRIES,
+  RETRY_BASE_DELAY_MS
+} from "../constants";
 
 interface DeviceStatusProps {
   deviceId: string;
 }
 
-// Helper to check if device is connected (seen within last 5 minutes)
+// Helper to check if device is connected (seen within configured timeout)
 const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
   if (!lastSeen) return false;
   const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-  return lastSeenDate.getTime() > fiveMinutesAgo;
+  const timeoutAgo = Date.now() - DEVICE_CONNECTION_TIMEOUT_MS;
+  return lastSeenDate.getTime() > timeoutAgo;
 };
 
 // Helper to get relative time string
@@ -78,9 +84,9 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
     return () => unsub();
   }, [deviceId]);
 
-  // Update relative time every 10 seconds
+  // Update relative time at configured interval
   useEffect(() => {
-    const interval = setInterval(() => setTick(t => t + 1), 10000);
+    const interval = setInterval(() => setTick(t => t + 1), RELATIVE_TIME_UPDATE_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -91,8 +97,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
 
   const commitPollingChange = async () => {
       if (!device || localPollingRate === null) return;
-      const maxRetries = 2;
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
+      for (let attempt = 0; attempt < DEVICE_STATUS_MAX_RETRIES; attempt++) {
         try {
           await updateDoc(doc(db, "devices", deviceId), {
               polling_rate: localPollingRate
@@ -105,13 +110,13 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
                                 err?.message?.includes('network') ||
                                 err?.message?.includes('fetch');
           
-          if (isNetworkError && attempt < maxRetries - 1) {
-            const waitTime = Math.pow(2, attempt) * 1000;
-            console.log(`Network error updating polling rate (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
+          if (isNetworkError && attempt < DEVICE_STATUS_MAX_RETRIES - 1) {
+            const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
+            console.log(`Network error updating polling rate (attempt ${attempt + 1}/${DEVICE_STATUS_MAX_RETRIES}), retrying in ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
           } else {
             console.error("Error updating polling rate:", error);
-            alert(`Failed to update polling rate${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${err?.message || 'Network error'}`);
+            alert(`Failed to update polling rate${attempt === DEVICE_STATUS_MAX_RETRIES - 1 ? ` after ${DEVICE_STATUS_MAX_RETRIES} attempts` : ''}: ${err?.message || 'Network error'}`);
             return;
           }
         }
