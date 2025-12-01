@@ -40,14 +40,14 @@ export default function ConsoleToolbar({
         </div>
 
         {/* Action buttons */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 justify-end">
           {/* Request Output Button */}
           <button
             onClick={onRequestOutput}
             disabled={runningCount === 0 || isRequesting}
-            className={`toolbar-button bg-blue-500/60 text-black border border-gray-800/50 opacity-60 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
+            className={`toolbar-button bg-blue-400 text-white border border-gray-800/50 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
               runningCount === 0 || isRequesting
-                ? "bg-blue-600/60 text-black border border-gray-800/50 cursor-not-allowed opacity-60"
+                ? "bg-blue-400/60 text-white border border-gray-800/50 cursor-not-allowed"
                 : "toolbar-button-primary"
             }`}
             title="Request output for active commands"
@@ -67,57 +67,6 @@ export default function ConsoleToolbar({
             </svg>
             <span className="hidden sm:inline">
               {isRequesting ? "Requesting..." : "Get Output"}
-            </span>
-          </button>
-
-          {/* Refresh Button */}
-          <button
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            className="toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-gray-900/80 text-gray-300 border border-gray-700/60 hover:bg-gray-800 hover:border-gray-600 disabled:opacity-50 transition-all duration-200"
-            title="Refresh command logs"
-          >
-            <svg 
-              className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
-              />
-            </svg>
-            <span className="hidden sm:inline">
-              {isRefreshing ? "Syncing..." : "Refresh"}
-            </span>
-          </button>
-
-          {/* Auto-polling Toggle */}
-          <button
-            onClick={onToggleAutoPolling}
-            className={`toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
-              autoPollingEnabled
-                ? "toolbar-button-live shadow-lg shadow-green-900/30"
-                : "bg-gray-900/80 text-gray-400 border border-gray-700/60 hover:bg-gray-800 hover:text-gray-300"
-            }`}
-            aria-pressed={autoPollingEnabled}
-            title={autoPollingEnabled ? "Disable auto-polling" : "Enable auto-polling (30s updates)"}
-          >
-            <span className="relative flex h-2.5 w-2.5">
-              {autoPollingEnabled ? (
-                <>
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]" />
-                </>
-              ) : (
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-gray-600" />
-              )}
-            </span>
-            <span className="hidden sm:inline font-semibold">
-              {autoPollingEnabled ? "Live" : "Manual"}
             </span>
           </button>
         </div>

@@ -12,7 +12,7 @@ interface CommandInputProps {
 export default function CommandInput({ 
   onSubmit, 
   disabled = false,
-  placeholder = "Enter command..."
+  placeholder = ""
 }: CommandInputProps) {
   const [inputCommand, setInputCommand] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);

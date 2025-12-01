@@ -204,6 +204,16 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     }
   }, [deviceId, logs]);
 
+  const runningLogs = useMemo(() => 
+    logs.filter(log => ['pending', 'processing'].includes(log.status)), 
+    [logs]
+  );
+  
+  const historyLogs = useMemo(() => 
+    logs.filter(log => !['pending', 'processing'].includes(log.status)), 
+    [logs]
+  );
+
   const handleClearHistory = useCallback(async () => {
     if (!deviceId || historyLogs.length === 0) return;
     if (!confirm("Clear terminal history? This cannot be undone.")) return;
@@ -220,7 +230,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       console.error("Error clearing history:", error);
       alert(`Failed to clear history: ${err?.message || 'Network error'}`);
     }
-  }, [deviceId]);
+  }, [deviceId, historyLogs]);
 
   const toggleLogExpansion = useCallback((logId: string) => {
     setExpandedLogs(prev => {
@@ -262,18 +272,8 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     return lines.slice(-maxLines).join('\n');
   }, []);
 
-  const runningLogs = useMemo(() => 
-    logs.filter(log => ['pending', 'processing'].includes(log.status)), 
-    [logs]
-  );
-  
-  const historyLogs = useMemo(() => 
-    logs.filter(log => !['pending', 'processing'].includes(log.status)), 
-    [logs]
-  );
-
   return (
-    <div className="console-view flex flex-col h-full">
+    <div className="console-view flex flex-col flex-1 min-h-0">
       {/* Error Banner */}
       {errorMsg && (
         <div className="console-error-banner bg-red-500/10 border-b border-red-500/40 text-red-400 px-4 py-2.5 text-sm flex items-center justify-between backdrop-blur-sm">
@@ -411,7 +411,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
         <CommandInput 
           onSubmit={sendCommand}
           disabled={!deviceId}
-          placeholder={deviceId ? "Enter command..." : "Select a device first"}
+          placeholder={""}
         />
       </div>
     </div>
