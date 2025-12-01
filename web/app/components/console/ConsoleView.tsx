@@ -317,8 +317,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       )}
 
       {/* Terminal Output */}
-      <div className="console-output flex-1 overflow-y-auto p-3 sm:p-4 scrollbar-thin font-mono text-sm">
-        <div className="space-y-6">
+      <div className="console-output flex-1 overflow-y-auto scrollbar-thin font-mono text-sm">
           <ConsoleToolbar
             runningCount={runningLogs.length}
             onRequestOutput={requestOutputForActiveCommands}
@@ -327,8 +326,8 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             isRefreshing={isRefreshing}
             autoPollingEnabled={autoPollingEnabled}
             onToggleAutoPolling={() => setAutoPollingEnabled(!autoPollingEnabled)}
-            className="-mx-3 sm:-mx-4"
           />
+        <div className="space-y-6 p-3 sm:p-4">
 
           {logs.length === 0 && (
             <div className="console-empty-state h-64 flex flex-col items-center justify-center text-gray-500 space-y-4">
