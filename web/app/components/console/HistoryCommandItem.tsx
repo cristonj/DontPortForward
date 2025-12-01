@@ -40,7 +40,9 @@ export default function HistoryCommandItem({
           <div className="flex justify-between items-center gap-2">
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <span className="text-terminal-accent/60 font-bold shrink-0">$</span>
-              <span className="font-mono text-sm text-gray-300 break-all -mt-2">{log.command}</span>
+              <span className="font-mono text-sm text-gray-300" title={log.command}>
+                {log.command.length > 80 ? `${log.command.substring(0, 80)}` : log.command}
+              </span>
             </div>
             
             <div className="flex items-center gap-1.5 shrink-0">

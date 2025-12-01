@@ -31,9 +31,6 @@ const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
 const SharedFolder = dynamic(() => import('./components/SharedFolder'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading files...</div>
 });
-const ApiExplorer = dynamic(() => import('./components/ApiExplorer'), {
-  loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading API explorer...</div>
-});
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
@@ -48,7 +45,7 @@ export default function Home() {
     return "";
   });
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
-  const [viewMode, setViewMode] = useState<'console' | 'status' | 'files' | 'api'>('console');
+  const [viewMode, setViewMode] = useState<'console' | 'status' | 'files'>('console');
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -218,8 +215,6 @@ export default function Home() {
         onRunCommand={sendCommand}
       />
     );
-  } else if (viewMode === 'api') {
-    mainContent = <ApiExplorer deviceId={selectedDeviceId} />;
   } else if (viewMode === 'status') {
     mainContent = <DeviceStatus deviceId={selectedDeviceId} />;
   } else if (selectedDeviceId && user) {
@@ -334,7 +329,7 @@ export default function Home() {
               <>
                 {/* View Mode Switcher */}
                 <div className="flex bg-gray-800/50 rounded-lg p-0.5 border border-gray-700/50">
-                  {(['console', 'files', 'api', 'status'] as const).map((mode) => (
+                  {(['console', 'files', 'status'] as const).map((mode) => (
                     <button 
                       key={mode}
                       onClick={() => setViewMode(mode)} 
@@ -344,7 +339,7 @@ export default function Home() {
                           : 'text-gray-400 hover:text-gray-300 hover:bg-gray-700/50'
                       }`}
                     >
-                      {mode === 'console' ? 'Term' : mode === 'status' ? 'Info' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                      {mode === 'console' ? 'Term' : mode === 'status' ? 'Info' : 'Files'}
                     </button>
                   ))}
                 </div>
