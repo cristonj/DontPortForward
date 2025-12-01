@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { db } from "../../../lib/firebase";
 import { 
   collection, 
@@ -14,7 +14,8 @@ import {
   updateDoc,
   writeBatch,
   deleteDoc,
-  getDocs
+  getDocs,
+  Timestamp
 } from "firebase/firestore";
 import { User } from "firebase/auth";
 import ConsoleToolbar from "./ConsoleToolbar";
@@ -41,24 +42,54 @@ import {
 } from "../../constants";
 import { getLastLines } from "../../utils";
 
+// Prefix for optimistic command IDs to distinguish them from real Firestore IDs
+const OPTIMISTIC_ID_PREFIX = "__optimistic__";
+
 interface ConsoleViewProps {
   deviceId: string;
   user: User;
 }
 
 export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
-  const [logs, setLogs] = useState<CommandLog[]>([]);
+  const [serverLogs, setServerLogs] = useState<CommandLog[]>([]);
+  const [optimisticCommands, setOptimisticCommands] = useState<CommandLog[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
   const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
   const [isRequestingOutput, setIsRequestingOutput] = useState(false);
+  
+  // Track pending optimistic command texts to match against server responses
+  const pendingCommandsRef = useRef<Map<string, string>>(new Map());
+  
+  // Merge server logs with optimistic commands, removing optimistic ones that have been confirmed
+  const logs = useMemo(() => {
+    // Filter out optimistic commands that have matching server entries
+    // (meaning the server has confirmed them)
+    const unconfirmedOptimistic = optimisticCommands.filter(opt => {
+      // Check if this optimistic command's text matches any recent server command
+      const matchingServerLog = serverLogs.find(
+        serverLog => serverLog.command === opt.command && 
+        ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+      );
+      // If there's a matching server log, remove the optimistic one
+      if (matchingServerLog) {
+        pendingCommandsRef.current.delete(opt.id);
+        return false;
+      }
+      return true;
+    });
+    
+    // Combine: optimistic first (they're the most recent), then server logs
+    return [...unconfirmedOptimistic, ...serverLogs];
+  }, [serverLogs, optimisticCommands]);
 
   // Listen for command logs
   useEffect(() => {
     if (!deviceId || !user) {
-      setLogs([]);
+      setServerLogs([]);
+      setOptimisticCommands([]);
       return;
     }
 
@@ -70,7 +101,21 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
         id: doc.id,
         ...doc.data()
       } as CommandLog));
-      setLogs(newLogs);
+      setServerLogs(newLogs);
+      
+      // Clean up any optimistic commands that have been confirmed by the server
+      setOptimisticCommands(prev => {
+        if (prev.length === 0) return prev;
+        
+        // Keep only optimistic commands that don't have a matching server entry yet
+        return prev.filter(opt => {
+          const hasMatch = newLogs.some(
+            serverLog => serverLog.command === opt.command && 
+            ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+          );
+          return !hasMatch;
+        });
+      });
     }, (error) => {
       if (error.code === 'permission-denied') {
         console.debug("Logs permission denied (possibly logged out)");
@@ -175,27 +220,44 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     }
   }, [deviceId, user, logs]);
 
-  const sendCommand = useCallback(async (command: string) => {
+  const sendCommand = useCallback((command: string) => {
     if (!command.trim() || !deviceId) return;
-
-    try {
-      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-      await addDoc(commandsRef, {
-        command,
-        type: COMMAND_TYPE_SHELL,
-        status: COMMAND_STATUS_PENDING,
-        created_at: serverTimestamp()
-      });
-      setErrorMsg("");
-    } catch (error: unknown) {
+    
+    // Generate optimistic ID and create optimistic command immediately
+    const optimisticId = `${OPTIMISTIC_ID_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const optimisticCommand: CommandLog = {
+      id: optimisticId,
+      command: command.trim(),
+      status: COMMAND_STATUS_PENDING,
+      created_at: Timestamp.now(),
+    };
+    
+    // Add to optimistic commands immediately (instant UI feedback)
+    setOptimisticCommands(prev => [optimisticCommand, ...prev]);
+    pendingCommandsRef.current.set(optimisticId, command.trim());
+    setErrorMsg("");
+    
+    // Fire and forget - send to Firestore in background
+    const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+    addDoc(commandsRef, {
+      command: command.trim(),
+      type: COMMAND_TYPE_SHELL,
+      status: COMMAND_STATUS_PENDING,
+      created_at: serverTimestamp()
+    }).catch((error: unknown) => {
+      // On error, remove the optimistic command and show error
       const err = error as { message?: string };
       console.error("Error sending command:", error);
+      setOptimisticCommands(prev => prev.filter(c => c.id !== optimisticId));
+      pendingCommandsRef.current.delete(optimisticId);
       setErrorMsg(`Error: ${err?.message || "Failed to send command"}`);
-    }
+    });
   }, [deviceId]);
 
   const killCommand = useCallback(async (cmdId: string) => {
     if (!deviceId) return;
+    // Can't kill optimistic commands that haven't been sent yet
+    if (cmdId.startsWith(OPTIMISTIC_ID_PREFIX)) return;
     try {
       const commandRef = doc(db, ...getCommandDocumentPath(deviceId, cmdId));
       await updateDoc(commandRef, { kill_signal: true });
@@ -206,6 +268,13 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
 
   const deleteCommand = useCallback(async (logId: string, isActive: boolean = false) => {
     if (!deviceId) return;
+    
+    // For optimistic commands, just remove from local state
+    if (logId.startsWith(OPTIMISTIC_ID_PREFIX)) {
+      setOptimisticCommands(prev => prev.filter(c => c.id !== logId));
+      pendingCommandsRef.current.delete(logId);
+      return;
+    }
     
     const log = logs.find(l => l.id === logId);
     const commandText = log?.command || 'this task';
@@ -275,7 +344,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
         id: doc.id,
         ...doc.data()
       } as CommandLog));
-      setLogs(newLogs);
+      setServerLogs(newLogs);
     } catch (error) {
       console.error("Error refreshing logs:", error);
     } finally {
@@ -364,6 +433,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
                     onKill={killCommand}
                     onDelete={(id) => deleteCommand(id, true)}
                     getLastLines={getLastLines}
+                    isOptimistic={log.id.startsWith(OPTIMISTIC_ID_PREFIX)}
                   />
                 ))}
               </div>
