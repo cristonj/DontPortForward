@@ -7,11 +7,23 @@ import {
   collection, 
   addDoc, 
   serverTimestamp,
+  doc,
+  onSnapshot,
 } from "firebase/firestore";
+import type { Timestamp } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import dynamic from 'next/dynamic';
 import DeviceList from "./components/DeviceList";
 import ConsoleView from "./components/console/ConsoleView";
+import type { Device } from "./types";
+
+// Helper to check if device is connected (seen within last 5 minutes)
+const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
+  if (!lastSeen) return false;
+  const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  return lastSeenDate.getTime() > fiveMinutesAgo;
+};
 
 const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
@@ -35,10 +47,14 @@ export default function Home() {
     }
     return "";
   });
+  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [viewMode, setViewMode] = useState<'console' | 'status' | 'files' | 'api'>('console');
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  // Force re-render for connection status check
+  const [, setTick] = useState(0);
 
   // Auth Listener
   useEffect(() => {
@@ -68,6 +84,30 @@ export default function Home() {
       setAuthLoading(false);
     });
     return () => unsubscribe();
+  }, []);
+
+  // Subscribe to selected device data
+  useEffect(() => {
+    if (!selectedDeviceId) {
+      setSelectedDevice(null);
+      return;
+    }
+
+    const unsub = onSnapshot(doc(db, "devices", selectedDeviceId), (docSnap) => {
+      if (docSnap.exists()) {
+        setSelectedDevice({ id: docSnap.id, ...docSnap.data() } as Device);
+      } else {
+        setSelectedDevice(null);
+      }
+    });
+
+    return () => unsub();
+  }, [selectedDeviceId]);
+
+  // Periodically refresh connection status
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleDeviceSelect = useCallback((id: string) => {
@@ -270,15 +310,19 @@ export default function Home() {
             <div className="flex flex-col min-w-0">
               <h1 className="font-bold text-sm sm:text-base leading-none tracking-tight truncate">
                 {selectedDeviceId ? (
-                  <span className="text-white">{selectedDeviceId}</span>
+                  <span className="text-white">{selectedDevice?.hostname || selectedDeviceId}</span>
                 ) : (
                   <span className="text-gray-500">Select Device</span>
                 )}
               </h1>
-              {selectedDeviceId && (
-                <span className="text-[10px] text-terminal-accent/70 leading-none mt-1 truncate flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-terminal-success animate-pulse" />
-                  Connected
+              {selectedDeviceId && selectedDevice && (
+                <span className={`text-[10px] leading-none mt-1 truncate flex items-center gap-1 ${
+                  isDeviceConnected(selectedDevice.last_seen) ? 'text-terminal-success' : 'text-red-400'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    isDeviceConnected(selectedDevice.last_seen) ? 'bg-terminal-success animate-pulse' : 'bg-red-500'
+                  }`} />
+                  {isDeviceConnected(selectedDevice.last_seen) ? 'Connected' : 'Not Connected'}
                 </span>
               )}
             </div>

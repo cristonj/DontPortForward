@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { db } from "../../lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
+import type { Timestamp } from "firebase/firestore";
 import type { Device } from "../types";
 
 interface DeviceListProps {
@@ -11,6 +12,14 @@ interface DeviceListProps {
   className?: string;
   currentUserEmail?: string | null;
 }
+
+// Helper to check if device is connected (seen within last 5 minutes)
+const isDeviceConnected = (lastSeen: Timestamp | null | undefined): boolean => {
+  if (!lastSeen) return false;
+  const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen as unknown as number);
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  return lastSeenDate.getTime() > fiveMinutesAgo;
+};
 
 const WindowsIcon = () => (
   <svg viewBox="0 0 88 88" className="w-5 h-5 text-blue-400 shrink-0" fill="currentColor">
@@ -107,20 +116,20 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
                         <div className="text-xs text-gray-500 truncate font-mono mt-0.5">{device.ip}</div>
                     </div>
                     <span className={`w-2.5 h-2.5 rounded-full shrink-0 ring-4 ring-gray-900 ${
-                       device.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-gray-600'
-                    }`} />
+                       isDeviceConnected(device.last_seen) ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-red-500'
+                    }`} title={isDeviceConnected(device.last_seen) ? 'Connected' : 'Not Connected'} />
                 </div>
               </div>
               
               {device.stats && (
                   <div className="flex gap-3 text-[10px] uppercase font-medium text-gray-500 pl-[3.25rem]">
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 whitespace-nowrap shrink-0">
                           <span className={`w-1 h-1 rounded-full ${device.stats.cpu_percent > 80 ? 'bg-red-500' : 'bg-blue-500'}`}></span>
-                          <span>CPU {Math.round(device.stats.cpu_percent)}%</span>
+                          <span>CPU {device.stats.cpu_percent.toFixed(0)}%</span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 whitespace-nowrap shrink-0">
                            <span className={`w-1 h-1 rounded-full ${device.stats.memory_percent > 80 ? 'bg-red-500' : 'bg-purple-500'}`}></span>
-                          <span>MEM {Math.round(device.stats.memory_percent)}%</span>
+                          <span>MEM {device.stats.memory_percent.toFixed(0)}%</span>
                       </div>
                   </div>
               )}
