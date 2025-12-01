@@ -78,7 +78,7 @@ export default function SwipeToDeleteLogItem({ children, onDelete, onClick, isEx
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        onClick={(e) => {
+        onClick={() => {
             if (!isSwiping && onClick) {
                 onClick();
             }

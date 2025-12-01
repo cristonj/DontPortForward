@@ -39,15 +39,16 @@
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
     NEXT_PUBLIC_FIREBASE_APP_ID=...
-    ALLOWED_EMAILS:... This is the comma seperated list of emails allowed to access the webapp. This can be different than the list of emails allowed to access the agent.
+    ALLOWED_EMAILS=... This is the comma separated list of emails allowed to access the webapp. This can be different than the list of emails allowed to access the agent.
     ```
 10. Now upload that `.env.local` content to netlify or whatever hosting provider you are using.
 11. Now we use that same `web/.env.local` file we just created for the agent's config (these are the required values for just the agent):
     ```env
     NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
-    ALLOWED_EMAILS=... The comma seperated list of emails allowed to access this agent.
+    ALLOWED_EMAILS=... The comma separated list of emails allowed to access this agent.
     DEVICE_ID=... This value is optional and sets the name for this agent that will be displayed in the device list.
+    ```
 12. Navigate to `agent/`.
 13. Install dependencies: (You should already have a recent version of python installed.)
     ```bash
@@ -57,7 +58,7 @@
 *   You can adjust this interval in `wrapper/launcher.py`
 *   **For a long term deployment, configure `wrapper/launcher.py` to run after reboot, when internet access is available.**
         Search the web or ask AI for information on how to do this in your environment.
-1.  Run the agent:
+15. Run the agent:
     ```bash
     python ../wrapper/launcher.py
     ```

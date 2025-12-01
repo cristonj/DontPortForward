@@ -3,6 +3,8 @@
 import SwipeToDeleteLogItem from "../SwipeToDeleteLogItem";
 import LogOutput from "../LogOutput";
 import { CommandLog } from "../../types/command";
+import { RefreshIcon, ChevronDownIcon } from "../Icons";
+import { StatusBadge } from "../ui";
 
 interface HistoryCommandItemProps {
   log: CommandLog;
@@ -21,9 +23,7 @@ export default function HistoryCommandItem({
   onRunAgain,
   getLastLines,
 }: HistoryCommandItemProps) {
-  const statusColor = log.status === "completed" 
-    ? "bg-terminal-success" 
-    : "bg-terminal-error";
+  const statusColor = log.status === "completed" ? "bg-terminal-success" : "bg-terminal-error";
 
   return (
     <SwipeToDeleteLogItem
@@ -55,29 +55,16 @@ export default function HistoryCommandItem({
                 className="text-gray-500 hover:text-terminal-accent p-1.5 rounded-lg hover:bg-terminal-accent/10 transition-colors"
                 title="Run again"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+                <RefreshIcon className="w-4 h-4" />
               </button>
               
               {/* Status badge */}
-              <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                log.status === 'completed' 
-                  ? 'text-terminal-success/70 bg-terminal-success/10' 
-                  : 'text-terminal-error/70 bg-terminal-error/10'
-              }`}>
-                {log.status}
-              </span>
+              <StatusBadge status={log.status} />
               
               {/* Expand chevron */}
-              <svg
-                className={`w-4 h-4 text-gray-600 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+              <ChevronDownIcon 
+                className={`w-4 h-4 text-gray-600 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} 
+              />
             </div>
           </div>
 

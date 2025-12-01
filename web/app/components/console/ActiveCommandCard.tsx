@@ -2,6 +2,8 @@
 
 import LogOutput from "../LogOutput";
 import { CommandLog } from "../../types/command";
+import { TrashIcon, ChevronDownIcon, CheckCircleIcon, ErrorIcon } from "../Icons";
+import { PulsingDot, CommandIdBadge } from "../ui";
 
 interface ActiveCommandCardProps {
   log: CommandLog;
@@ -36,17 +38,9 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
           
           {/* Metadata */}
           <div className="text-xs text-gray-500 font-mono flex items-center gap-3 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-gray-900/60 border border-gray-800/50">
-              <svg className="w-3 h-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-              </svg>
-              <span className="text-gray-400">{log.id.substring(0, 8)}</span>
-            </span>
+            <CommandIdBadge id={log.id} />
             <span className="inline-flex items-center gap-1.5">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terminal-accent opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-terminal-accent"></span>
-              </span>
+              <PulsingDot size="sm" color="accent" />
               <span className="uppercase text-terminal-accent font-semibold tracking-wide">{log.status}</span>
             </span>
           </div>
@@ -66,19 +60,12 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
             className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-all duration-200"
             title="Delete task"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
+            <TrashIcon className="w-4 h-4" />
           </button>
           {/* Expand chevron */}
-          <svg
+          <ChevronDownIcon 
             className={`w-5 h-5 text-gray-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
+          />
         </div>
       </div>
 
@@ -91,9 +78,7 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
                 {log.output && (
                   <div>
                     <div className="text-terminal-accent/70 text-[10px] mb-2 uppercase tracking-wider font-bold flex items-center gap-2">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
+                      <CheckCircleIcon className="w-3 h-3" />
                       Output (Last 10 lines)
                     </div>
                     <LogOutput text={getLastLines(log.output, 10)} />
@@ -102,9 +87,7 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
                 {log.error && (
                   <div>
                     <div className="text-terminal-error/70 text-[10px] mb-2 uppercase tracking-wider font-bold flex items-center gap-2">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
+                      <ErrorIcon className="w-3 h-3" />
                       Error
                     </div>
                     <LogOutput text={getLastLines(log.error, 10)} isError />
@@ -114,9 +97,8 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
             ) : (
               <div className="flex items-center justify-center h-28">
                 <div className="text-center">
-                  <div className="relative inline-flex mb-3">
-                    <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-terminal-accent/40" />
-                    <span className="relative inline-flex h-4 w-4 rounded-full bg-terminal-accent" />
+                  <div className="mb-3 flex justify-center">
+                    <PulsingDot size="lg" color="accent" />
                   </div>
                   <div className="text-gray-500 text-xs">Waiting for output...</div>
                 </div>
@@ -131,10 +113,7 @@ export default function ActiveCommandCard({ log, isExpanded, onToggle, onKill, o
               <span className="text-terminal-error/70">{log.error.substring(0, 100)}...</span>
             ) : (
               <span className="text-gray-600 italic flex items-center gap-2">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terminal-accent opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-terminal-accent"></span>
-                </span>
+                <PulsingDot size="sm" color="accent" />
                 Waiting for output...
               </span>
             )}

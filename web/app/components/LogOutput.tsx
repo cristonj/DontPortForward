@@ -37,4 +37,3 @@ const LogOutput = memo(function LogOutput({ text, isError = false }: LogOutputPr
 LogOutput.displayName = "LogOutput";
 
 export default LogOutput;
-

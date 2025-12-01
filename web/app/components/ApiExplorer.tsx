@@ -8,9 +8,11 @@ import {
   API_COMMAND_TYPE, 
   DEFAULT_MAX_RETRIES, 
   RETRY_BASE_DELAY_MS,
-  getCommandsCollectionPath
+  getCommandsCollectionPath,
+  getCommandDocumentPath
 } from "../constants";
-import { isNetworkError } from "../utils";
+import { isNetworkError, getErrorMessage } from "../utils";
+import { LoadingSpinner } from "./ui";
 
 export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState(API_ENDPOINTS[0]);
@@ -28,7 +30,9 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
     let bodyObj = {};
     try {
         if (requestBody) bodyObj = JSON.parse(requestBody);
-    } catch (e) {}
+    } catch {
+      // Ignore parse errors - use empty object
+    }
     
     if (snippetLang === 'python') {
         const pythonBody = JSON.stringify(bodyObj, null, 4)
@@ -120,7 +124,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
           if (requestBody) {
              bodyData = JSON.parse(requestBody);
           }
-        } catch (e) {
+        } catch {
           setError("Invalid JSON body");
           setLoading(false);
           return;
@@ -128,7 +132,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
       }
 
       // Retry logic for sending API command
-      let docRef: any = null;
+      let docRef: Awaited<ReturnType<typeof addDoc>> | null = null;
       
       for (let attempt = 0; attempt < DEFAULT_MAX_RETRIES; attempt++) {
         try {
@@ -142,7 +146,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
             created_at: serverTimestamp()
           });
           break; // Success
-        } catch (error: any) {
+        } catch (error) {
           if (isNetworkError(error) && attempt < DEFAULT_MAX_RETRIES - 1) {
             const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
             console.log(`Network error sending API command (attempt ${attempt + 1}/${DEFAULT_MAX_RETRIES}), retrying in ${waitTime}ms...`);
@@ -174,9 +178,9 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
         }
       });
 
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error executing API request:", err);
-      setError(err.message);
+      setError(getErrorMessage(err, 'Unknown error'));
       setLoading(false);
     }
   };
@@ -185,7 +189,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
     <div className="h-full flex flex-col p-4 sm:p-6 text-gray-200 font-mono overflow-y-auto md:overflow-hidden">
       <div className="mb-6">
         <h2 className="text-xl font-bold text-white mb-2">API Explorer</h2>
-        <p className="text-sm text-gray-500">Explore the agent's local API endpoints.</p>
+        <p className="text-sm text-gray-500">Explore the agent&apos;s local API endpoints.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 md:min-h-0">
@@ -256,10 +260,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
                 >
                     {loading ? (
                         <>
-                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
+                            <LoadingSpinner size="sm" color="white" />
                             Sending Request...
                         </>
                     ) : (

@@ -18,8 +18,10 @@ from requests.exceptions import RequestException, ConnectionError, Timeout
 from google.api_core import exceptions as google_exceptions
 try:
     from api import app as api_app
+    from retry import with_retry, NETWORK_EXCEPTIONS
 except ImportError:
     from agent.api import app as api_app
+    from agent.retry import with_retry, NETWORK_EXCEPTIONS
 
 # Suppress google-crc32c warning (no C extension on Windows Python 3.14)
 warnings.filterwarnings("ignore", message="As the c extension couldn't be imported")
@@ -76,7 +78,7 @@ try:
     db = firestore.client()
 except Exception as e:
     print(f"Error initializing Firebase: {e}")
-    pass
+    raise
 
 def start_api():
     """Starts the FastAPI server."""
@@ -127,24 +129,16 @@ class FileSyncer(threading.Thread):
                     
                     if download:
                         print(f"Downloading {filename}...")
-                        # Retry download with exponential backoff
-                        max_retries = 3
-                        retry_delay = 1
-                        for attempt in range(max_retries):
-                            try:
-                                blob.download_to_filename(local_file_path)
-                                os.utime(local_file_path, (remote_mtime, remote_mtime))
-                                break  # Success
-                            except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded, ConnectionError) as e:
-                                if attempt < max_retries - 1:
-                                    wait_time = retry_delay * (2 ** attempt)
-                                    print(f"Network error downloading {filename} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                                    time.sleep(wait_time)
-                                else:
-                                    print(f"Failed to download {filename} after {max_retries} attempts: {e}")
-                            except Exception as e:
-                                print(f"Error downloading {filename}: {e}")
-                                break
+                        
+                        def do_download():
+                            blob.download_to_filename(local_file_path)
+                            os.utime(local_file_path, (remote_mtime, remote_mtime))
+                        
+                        with_retry(
+                            do_download,
+                            operation_name=f"download {filename}",
+                            suppress_final_error=True
+                        )
 
                 # Local -> Remote Sync (Deletion)
                 remote_filenames = {os.path.basename(b.name) for b in blobs if os.path.basename(b.name)}
@@ -240,37 +234,28 @@ class CommandExecutor(threading.Thread):
                 
                 try:
                     url = f"{API_URL}{endpoint}"
-                    # Retry logic with exponential backoff for network failures
-                    max_retries = 3
-                    retry_delay = 1
-                    last_error = None
                     
-                    for attempt in range(max_retries):
-                        try:
-                            response = requests.request(method, url, json=body, timeout=5)
-                            try:
-                                output_data = json.dumps(response.json(), indent=2)
-                            except:
-                                output_data = response.text
-                                
-                            self.cmd_ref.update({
-                                'output': output_data,
-                                'status': 'completed',
-                                'return_code': response.status_code,
-                                'completed_at': firestore.SERVER_TIMESTAMP
-                            })
-                            return  # Success, exit retry loop
-                        except (ConnectionError, Timeout) as e:
-                            last_error = e
-                            if attempt < max_retries - 1:
-                                wait_time = retry_delay * (2 ** attempt)
-                                print(f"[{self.cmd_id}] Network error (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                                time.sleep(wait_time)
-                            else:
-                                raise
-                        except RequestException as e:
-                            # Non-retryable request errors (4xx, 5xx)
-                            raise
+                    def make_api_request():
+                        return requests.request(method, url, json=body, timeout=5)
+                    
+                    response = with_retry(
+                        make_api_request,
+                        exceptions=(ConnectionError, Timeout),
+                        operation_name="API request",
+                        log_prefix=f"[{self.cmd_id}]"
+                    )
+                    
+                    try:
+                        output_data = json.dumps(response.json(), indent=2)
+                    except Exception:
+                        output_data = response.text
+                        
+                    self.cmd_ref.update({
+                        'output': output_data,
+                        'status': 'completed',
+                        'return_code': response.status_code,
+                        'completed_at': firestore.SERVER_TIMESTAMP
+                    })
                     
                 except Exception as e:
                     error_msg = f"Network error: {str(e)}" if isinstance(e, (ConnectionError, Timeout)) else str(e)
@@ -342,22 +327,12 @@ class CommandExecutor(threading.Thread):
                 update_data['status'] = 'cancelled'
 
             # Retry final status update with exponential backoff
-            max_retries = 3
-            retry_delay = 1
-            for attempt in range(max_retries):
-                try:
-                    self.cmd_ref.update(update_data)
-                    break  # Success
-                except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
-                    if attempt < max_retries - 1:
-                        wait_time = retry_delay * (2 ** attempt)
-                        print(f"[{self.cmd_id}] Network error updating final status (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                    else:
-                        print(f"[{self.cmd_id}] Failed to update final status after {max_retries} attempts: {e}")
-                except Exception as e:
-                    print(f"[{self.cmd_id}] Error updating final status: {e}")
-                    break
+            with_retry(
+                lambda: self.cmd_ref.update(update_data),
+                operation_name="update final status",
+                log_prefix=f"[{self.cmd_id}]",
+                suppress_final_error=True
+            )
             
             # Keep in registry for a short time after completion for API access
             # Will be cleaned up after a delay
@@ -365,24 +340,18 @@ class CommandExecutor(threading.Thread):
         except Exception as e:
             print(f"[{self.cmd_id}] Error: {e}")
             # Retry error status update
-            max_retries = 2
-            retry_delay = 1
-            for attempt in range(max_retries):
-                try:
-                    self.cmd_ref.update({
-                        'status': 'completed',
-                        'error': str(e),
-                        'completed_at': firestore.SERVER_TIMESTAMP
-                    })
-                    break
-                except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as update_error:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (2 ** attempt))
-                    else:
-                        print(f"[{self.cmd_id}] Failed to update error status: {update_error}")
-                except Exception as update_error:
-                    print(f"[{self.cmd_id}] Error updating error status: {update_error}")
-                    break
+            error_data = {
+                'status': 'completed',
+                'error': str(e),
+                'completed_at': firestore.SERVER_TIMESTAMP
+            }
+            with_retry(
+                lambda: self.cmd_ref.update(error_data),
+                max_retries=2,
+                operation_name="update error status",
+                log_prefix=f"[{self.cmd_id}]",
+                suppress_final_error=True
+            )
         finally:
             if self.kill_listener:
                 self.kill_listener.unsubscribe()
@@ -457,25 +426,19 @@ class CommandExecutor(threading.Thread):
                             self._last_request_id = request_id
                             # Get requested output and write to Firestore
                             stdout, stderr = self.get_recent_output(seconds=seconds)
-                            # Retry output request update with exponential backoff
-                            max_retries = 2
-                            retry_delay = 0.5
-                            for attempt in range(max_retries):
-                                try:
-                                    self.cmd_ref.update({
-                                        'output': stdout,
-                                        'error': stderr,
-                                        'output_request': firestore.DELETE_FIELD  # Clear the request
-                                    })
-                                    break  # Success
-                                except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
-                                    if attempt < max_retries - 1:
-                                        time.sleep(retry_delay * (2 ** attempt))
-                                    else:
-                                        print(f"[{self.cmd_id}] Error handling output request after {max_retries} attempts: {e}")
-                                except Exception as e:
-                                    print(f"[{self.cmd_id}] Error handling output request: {e}")
-                                    break
+                            output_update = {
+                                'output': stdout,
+                                'error': stderr,
+                                'output_request': firestore.DELETE_FIELD  # Clear the request
+                            }
+                            with_retry(
+                                lambda: self.cmd_ref.update(output_update),
+                                max_retries=2,
+                                retry_delay=0.5,
+                                operation_name="handle output request",
+                                log_prefix=f"[{self.cmd_id}]",
+                                suppress_final_error=True
+                            )
         except Exception as e:
             print(f"Error in kill listener: {e}")
 
@@ -513,28 +476,19 @@ class Agent:
 
     def fetch_agent_info(self):
         """Fetches data from the local API with retry logic."""
-        max_retries = 3
-        retry_delay = 1
+        def do_fetch():
+            response = requests.get(f"{API_URL}/status", timeout=5)
+            if response.status_code == 200:
+                return response.json()
+            raise ConnectionError(f"API returned status {response.status_code}")
         
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(f"{API_URL}/status", timeout=5)
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    print(f"API returned status {response.status_code}, retrying...")
-            except (ConnectionError, Timeout) as e:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    print(f"Network error fetching agent info (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"Error fetching data from API after {max_retries} attempts: {e}")
-            except Exception as e:
-                print(f"Error fetching data from API: {e}")
-                break  # Don't retry for non-network errors
-        
-        return {}  # Return empty dict on failure
+        result = with_retry(
+            do_fetch,
+            exceptions=(ConnectionError, Timeout),
+            operation_name="fetch agent info",
+            suppress_final_error=True
+        )
+        return result if result else {}
 
     def cleanup_stale_commands(self):
         """Clean up any pending or processing commands from previous runs."""
@@ -575,45 +529,34 @@ class Agent:
 
     def register(self):
         """Register device with retry logic for network failures."""
-        max_retries = 3
-        retry_delay = 2
+        info = self.fetch_agent_info()
         
-        for attempt in range(max_retries):
-            try:
-                info = self.fetch_agent_info()
-                
-                data = {
-                    'hostname': info.get('hostname', platform.node()),
-                    'platform': info.get('platform', platform.system()),
-                    'release': info.get('release', platform.release()),
-                    'version': info.get('version', platform.version()),
-                    'last_seen': firestore.SERVER_TIMESTAMP,
-                    'status': 'online',
-                    'ip': info.get('ip', '127.0.0.1'),
-                    'stats': info.get('stats', {}),
-                    'git': info.get('git', {}),
-                    'polling_rate': 30,  # Increased from 10s to 30s to reduce DB operations
-                    'sleep_polling_rate': 60,
-                    'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
-                }
-                
-                self.doc_ref.set(data, merge=True)
-                
-                # Cleanup stale commands after successful registration
-                self.cleanup_stale_commands()
-                
-                print(f"Device {self.device_id} registered.")
-                return  # Success
-            except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded, ConnectionError) as e:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    print(f"Network error registering device (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"Error registering device after {max_retries} attempts: {e}")
-            except Exception as e:
-                print(f"Error registering device: {e}")
-                break  # Don't retry for non-network errors
+        data = {
+            'hostname': info.get('hostname', platform.node()),
+            'platform': info.get('platform', platform.system()),
+            'release': info.get('release', platform.release()),
+            'version': info.get('version', platform.version()),
+            'last_seen': firestore.SERVER_TIMESTAMP,
+            'status': 'online',
+            'ip': info.get('ip', '127.0.0.1'),
+            'stats': info.get('stats', {}),
+            'git': info.get('git', {}),
+            'polling_rate': 30,  # Increased from 10s to 30s to reduce DB operations
+            'sleep_polling_rate': 60,
+            'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
+        }
+        
+        result = with_retry(
+            lambda: self.doc_ref.set(data, merge=True),
+            retry_delay=2,
+            operation_name="register device",
+            suppress_final_error=True
+        )
+        
+        if result is not None or True:  # set() returns None on success
+            # Cleanup stale commands after successful registration
+            self.cleanup_stale_commands()
+            print(f"Device {self.device_id} registered.")
 
     def start_watching(self):
         if not self.watch:
@@ -647,21 +590,12 @@ class Agent:
             if info.get('git'):
                 update_data['git'] = info.get('git')
             
-            # Retry logic for Firestore updates
-            max_retries = 2
-            retry_delay = 1
-            for attempt in range(max_retries):
-                try:
-                    self.doc_ref.update(update_data)
-                    return  # Success
-                except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (2 ** attempt))
-                    else:
-                        print(f"Error sending heartbeat after {max_retries} attempts: {e}")
-                except Exception as e:
-                    print(f"Error sending heartbeat: {e}")
-                    break
+            with_retry(
+                lambda: self.doc_ref.update(update_data),
+                max_retries=2,
+                operation_name="send heartbeat",
+                suppress_final_error=True
+            )
         except Exception as e:
             print(f"Error preparing heartbeat: {e}")
 

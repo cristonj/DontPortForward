@@ -22,6 +22,8 @@ import ActiveCommandCard from "./ActiveCommandCard";
 import HistoryCommandItem from "./HistoryCommandItem";
 import CommandInput from "./CommandInput";
 import { CommandLog } from "../../types/command";
+import { ErrorIcon, CloseIcon, WarningIcon, TerminalIcon, TrashIcon } from "../Icons";
+import { PulsingDot } from "../ui";
 import {
   COMMAND_TYPE_SHELL,
   COMMAND_STATUS_PENDING,
@@ -96,7 +98,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     const autoRequestOutput = async () => {
       if (!isPollingEnabled || !isPageVisible) return;
       
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
       if (activeLogs.length === 0) return;
       
       const logsToUpdate = activeLogs.slice(0, CONSOLE_MAX_LOGS_TO_UPDATE);
@@ -147,7 +149,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     
     setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any));
+      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
       if (activeLogs.length === 0) {
         setIsRequestingOutput(false);
         return;
@@ -221,12 +223,12 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
   }, [deviceId, logs]);
 
   const runningLogs = useMemo(() => 
-    logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
+    logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status)), 
     [logs]
   );
   
   const historyLogs = useMemo(() => 
-    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status as any)), 
+    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status)), 
     [logs]
   );
 
@@ -287,9 +289,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       {errorMsg && (
         <div className="console-error-banner bg-terminal-error/10 border-b border-terminal-error/40 text-terminal-error px-4 py-2.5 text-sm flex items-center justify-between backdrop-blur-sm">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+            <ErrorIcon className="w-4 h-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
           <button 
@@ -297,9 +297,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             className="text-terminal-error hover:text-terminal-error/80 ml-4 p-1 rounded hover:bg-terminal-error/10 transition-colors"
             aria-label="Dismiss error"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <CloseIcon className="w-4 h-4" />
           </button>
         </div>
       )}
@@ -308,9 +306,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       {showConnectionWarning && (
         <div className="console-warning-banner bg-amber-500/10 border-b border-amber-500/40 text-amber-400 px-4 py-2.5 text-sm flex items-center justify-between backdrop-blur-sm">
           <div className="flex items-center gap-3">
-            <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
+            <WarningIcon className="w-5 h-5 shrink-0" />
             <span>Connection issues detected. Updates temporarily reduced.</span>
           </div>
           <button 
@@ -318,9 +314,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             className="text-amber-400 hover:text-amber-300 ml-4 p-1 rounded hover:bg-amber-500/10 transition-colors shrink-0"
             aria-label="Dismiss warning"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <CloseIcon className="w-4 h-4" />
           </button>
         </div>
       )}
@@ -341,9 +335,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
           {logs.length === 0 && (
             <div className="console-empty-state h-64 flex flex-col items-center justify-center text-gray-500 space-y-4">
               <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700/50 flex items-center justify-center shadow-xl">
-                <svg className="w-8 h-8 text-terminal-accent/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
+                <TerminalIcon className="w-8 h-8 text-terminal-accent/60" />
               </div>
               <div className="text-center">
                 <p className="text-gray-400 font-medium">Ready for commands</p>
@@ -357,10 +349,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             <section className="console-active-section space-y-3 pb-2">
               <div className="console-section-header bg-gray-950/80 backdrop-blur-sm py-2 -mt-2 border-b border-terminal-accent/20">
                 <h3 className="text-xs uppercase tracking-wider text-terminal-accent font-bold flex items-center gap-2">
-                  <span className="relative flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terminal-accent opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-terminal-accent"></span>
-                  </span>
+                  <PulsingDot size="md" color="accent" />
                   Active Processes ({runningLogs.length})
                   <span className="ml-auto text-[10px] text-terminal-accent/50 normal-case tracking-normal font-normal">Real-time updates</span>
                 </h3>
@@ -392,9 +381,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
                   onClick={handleClearHistory}
                   className="console-clear-btn text-[10px] text-gray-500 hover:text-terminal-error uppercase tracking-wider transition-colors flex items-center gap-1 hover:bg-terminal-error/10 px-2 py-1 rounded"
                 >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
+                  <TrashIcon className="w-3 h-3" />
                   Clear
                 </button>
               </div>
