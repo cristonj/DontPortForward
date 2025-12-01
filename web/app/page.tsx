@@ -1,29 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback, ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 import { db, auth } from "../lib/firebase";
 import { 
   collection, 
-  query, 
-  orderBy, 
-  onSnapshot, 
   addDoc, 
   serverTimestamp,
-  limit,
-  doc,
-  updateDoc,
-  writeBatch,
-  deleteDoc,
-  getDocs
 } from "firebase/firestore";
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
 import dynamic from 'next/dynamic';
 import DeviceList from "./components/DeviceList";
-import ConsoleToolbar from "./components/console/ConsoleToolbar";
-import ActiveCommandCard from "./components/console/ActiveCommandCard";
-import HistoryCommandItem from "./components/console/HistoryCommandItem";
-import { CommandLog } from "./types/command";
+import ConsoleView from "./components/console/ConsoleView";
 
 const DeviceStatus = dynamic(() => import('./components/DeviceStatus'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading status...</div>
@@ -35,52 +23,22 @@ const ApiExplorer = dynamic(() => import('./components/ApiExplorer'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading API explorer...</div>
 });
 
-const SUGGESTED_COMMANDS = [
-  "ls -la",
-  "ps aux",
-  "df -h",
-  "free -m",
-  "uptime",
-  "whoami",
-  "id",
-  "ip addr",
-  "netstat -tuln",
-  "docker ps",
-  "systemctl status",
-  "cat /etc/os-release",
-  "uname -a",
-  "top -b -n 1"
-];
-
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const isForcedLogout = useRef(false);
 
-  const [selectedDeviceId, setSelectedDeviceId] = useState("");
-  const [inputCommand, setInputCommand] = useState("");
-  const [logs, setLogs] = useState<CommandLog[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("selectedDeviceId") || "";
+    }
+    return "";
+  });
   const [viewMode, setViewMode] = useState<'console' | 'status' | 'files' | 'api'>('console');
-  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  
-  // Autocomplete state
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [suggestionIndex, setSuggestionIndex] = useState(-1);
-  
-  // Expanded history logs state
-  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
-  
-  // Connection issues warning
-  const [showConnectionWarning, setShowConnectionWarning] = useState(false);
-  
-  // Auto-polling state (disabled by default to reduce DB operations)
-  const [autoPollingEnabled, setAutoPollingEnabled] = useState(false);
-  const [isRequestingOutput, setIsRequestingOutput] = useState(false);
 
   // Auth Listener
   useEffect(() => {
@@ -88,22 +46,22 @@ export default function Home() {
       if (isForcedLogout.current) {
         isForcedLogout.current = false;
       } else {
-        setErrorMsg(""); // Clear previous errors
+        setErrorMsg("");
       }
 
       if (currentUser && currentUser.email) {
         const envAllowed = process.env.ALLOWED_EMAILS;
         if (envAllowed) {
-            const allowed = envAllowed.split(',').map(e => e.trim());
-            if (!allowed.includes(currentUser.email)) {
-                console.log("Access denied for:", currentUser.email);
-                isForcedLogout.current = true;
-                await signOut(auth);
-                setErrorMsg("Access Denied: Your email is not in the allowed list.");
-                setUser(null);
-                setAuthLoading(false);
-                return;
-            }
+          const allowed = envAllowed.split(',').map(e => e.trim());
+          if (!allowed.includes(currentUser.email)) {
+            console.log("Access denied for:", currentUser.email);
+            isForcedLogout.current = true;
+            await signOut(auth);
+            setErrorMsg("Access Denied: Your email is not in the allowed list.");
+            setUser(null);
+            setAuthLoading(false);
+            return;
+          }
         }
       }
       setUser(currentUser);
@@ -112,466 +70,46 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  // Load selected device ID from local storage on mount
-  useEffect(() => {
-    const savedId = localStorage.getItem("selectedDeviceId");
-    if (savedId) setSelectedDeviceId(savedId);
-  }, []);
-
   const handleDeviceSelect = useCallback((id: string) => {
-      setSelectedDeviceId(id);
-      localStorage.setItem("selectedDeviceId", id);
-      setIsSidebarOpen(false); // Close sidebar on selection on mobile
+    setSelectedDeviceId(id);
+    localStorage.setItem("selectedDeviceId", id);
+    setIsSidebarOpen(false);
   }, []);
 
-  // Listen for logs of the selected device - ONLY when console view is active
-  useEffect(() => {
-    if (!selectedDeviceId || !user || viewMode !== 'console') {
-        if (viewMode !== 'console') {
-          // Keep existing logs when switching away from console
-          return;
-        }
-        setLogs([]);
-        return;
-    }
+  const sendCommand = useCallback(async (command: string) => {
+    if (!command.trim() || !selectedDeviceId) return;
 
-    const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-    // Change to descending to get the most recent commands first
-    const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setLogs(newLogs);
-    }, (error) => {
-      if (error.code === 'permission-denied') {
-          // Permissions might be lost during logout, ignore safely
-          console.debug("Logs permission denied (possibly logged out)");
-      } else {
-          console.error("Error fetching logs:", error);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [selectedDeviceId, user, viewMode]);
-
-  // Auto-polling for active commands (disabled by default to reduce DB ops)
-  useEffect(() => {
-    if (!selectedDeviceId || !user || viewMode !== 'console' || !autoPollingEnabled) return;
-
-    let consecutiveErrors = 0;
-    let isPollingEnabled = true;
-    let isPageVisible = true;
-
-    // Check if page is visible to pause polling when tab is hidden
-    const handleVisibilityChange = () => {
-      isPageVisible = !document.hidden;
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    const autoRequestOutput = async () => {
-      if (!isPollingEnabled || !isPageVisible) return;
-      
-      // Find active commands that need output
-      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
-      
-      // Skip if no active commands (saves unnecessary processing)
-      if (activeLogs.length === 0) return;
-      
-      // Limit to max 2 concurrent update requests to avoid overwhelming Firestore
-      const logsToUpdate = activeLogs.slice(0, 2);
-      
-      for (const log of logsToUpdate) {
-        // Only request if we don't have recent output or it's been a while (30s threshold)
-        const needsUpdate = !log.output || 
-          (log.last_activity && log.last_activity.toMillis && Date.now() - log.last_activity.toMillis() > 30000);
-        
-        if (needsUpdate) {
-          // Retry logic for output requests
-          const maxRetries = 2;
-          let requestSuccess = false;
-          for (let retryAttempt = 0; retryAttempt < maxRetries; retryAttempt++) {
-            try {
-              const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-              await updateDoc(commandRef, {
-                output_request: {
-                  seconds: 60,  // Request last 60 seconds
-                  request_id: `${Date.now()}-${Math.random()}`
-                }
-              });
-              consecutiveErrors = 0; // Reset error counter on success
-              requestSuccess = true;
-              break; // Success
-            } catch (error: any) {
-              const isNetworkError = error?.code === 'unavailable' || 
-                                    error?.code === 'deadline-exceeded' ||
-                                    error?.message?.includes('network') ||
-                                    error?.message?.includes('fetch');
-              
-              if (isNetworkError && retryAttempt < maxRetries - 1) {
-                const waitTime = Math.pow(2, retryAttempt) * 500; // Shorter backoff for polling
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-              } else {
-                consecutiveErrors++;
-                console.debug("Could not request output:", error);
-                
-                // Error handling: If too many failures, likely blocked by browser extension
-                if (consecutiveErrors > 5) {
-                  console.warn("Multiple polling errors detected - reducing poll frequency");
-                  setShowConnectionWarning(true);
-                  isPollingEnabled = false;
-                  setTimeout(() => { 
-                    isPollingEnabled = true;
-                    setShowConnectionWarning(false);
-                  }, 60000);
-                }
-                break; // Don't retry further
-              }
-            }
-          }
-        }
-      }
-    };
-
-    // Poll every 30 seconds when auto-polling is enabled
-    const interval = setInterval(autoRequestOutput, 30000);
-    autoRequestOutput(); // Initial request on mount
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [selectedDeviceId, user, viewMode, logs, autoPollingEnabled]);
-
-  // Manual function to request output for active commands
-  const requestOutputForActiveCommands = useCallback(async () => {
-    if (!selectedDeviceId || !user || viewMode !== 'console') return;
-    
-    setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ['pending', 'processing'].includes(log.status));
-      
-      if (activeLogs.length === 0) {
-        setIsRequestingOutput(false);
-        return;
-      }
-      
-      // Request output for all active commands with retry logic
-      const requests = activeLogs.map(async (log) => {
-        const maxRetries = 2;
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-          try {
-            const commandRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-            await updateDoc(commandRef, {
-              output_request: {
-                seconds: 60,
-                request_id: `${Date.now()}-${Math.random()}`
-              }
-            });
-            break; // Success
-          } catch (error: any) {
-            const isNetworkError = error?.code === 'unavailable' || 
-                                  error?.code === 'deadline-exceeded' ||
-                                  error?.message?.includes('network') ||
-                                  error?.message?.includes('fetch');
-            
-            if (isNetworkError && attempt < maxRetries - 1) {
-              const waitTime = Math.pow(2, attempt) * 500;
-              await new Promise(resolve => setTimeout(resolve, waitTime));
-            } else {
-              console.debug("Could not request output for command:", log.id, error);
-              break;
-            }
-          }
-        }
+      const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
+      await addDoc(commandsRef, {
+        command,
+        type: 'shell',
+        status: 'pending',
+        created_at: serverTimestamp()
       });
-      
-      await Promise.all(requests);
-    } catch (error: any) {
-      console.error("Error requesting output:", error);
-    } finally {
-      setIsRequestingOutput(false);
+      setViewMode('console');
+    } catch (error) {
+      console.error("Error sending command:", error);
     }
-  }, [selectedDeviceId, user, viewMode, logs]);
-
-  // Handle Input Change & Autocomplete
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setInputCommand(value);
-    
-    if (value.trim()) {
-        const filtered = SUGGESTED_COMMANDS.filter(cmd => 
-            cmd.toLowerCase().startsWith(value.toLowerCase()) && cmd !== value
-        );
-        setSuggestions(filtered);
-        setShowSuggestions(filtered.length > 0);
-        setSuggestionIndex(-1);
-    } else {
-        setShowSuggestions(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (!showSuggestions) return;
-
-      if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setSuggestionIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : prev));
-      } else if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setSuggestionIndex(prev => (prev > 0 ? prev - 1 : -1));
-      } else if (e.key === "Tab" || e.key === "Enter") {
-          if (suggestionIndex >= 0) {
-              e.preventDefault();
-              setInputCommand(suggestions[suggestionIndex]);
-              setShowSuggestions(false);
-          }
-      } else if (e.key === "Escape") {
-          setShowSuggestions(false);
-      }
-  };
-
-  const sendCommand = useCallback(async (e?: React.FormEvent, cmdString?: string) => {
-    if (e) e.preventDefault();
-    const cmdToRun = cmdString || inputCommand;
-    
-    if (!cmdToRun.trim() || !selectedDeviceId) return;
-
-    const maxRetries = 3;
-    let lastError: any = null;
-    
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-        await addDoc(commandsRef, {
-          command: cmdToRun,
-          type: 'shell', // Default to shell
-          status: 'pending',
-          created_at: serverTimestamp()
-        });
-        setErrorMsg(""); // Clear any previous errors
-        if (!cmdString) {
-            setInputCommand("");
-            setShowSuggestions(false);
-        } else {
-            // Switch to console view to see output
-            setViewMode('console');
-        }
-        return; // Success
-      } catch (error: any) {
-        lastError = error;
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch') ||
-                              error?.message?.includes('Failed to fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff in ms
-          console.log(`Network error sending command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error sending command:", error);
-          const errorMessage = error?.message || "Failed to send command. Check console for details.";
-          setErrorMsg(`Error: ${errorMessage}${attempt === maxRetries - 1 ? ` (after ${maxRetries} attempts)` : ''}`);
-          // Log full error details for debugging
-          if (error?.code) {
-            console.error("Firebase error code:", error.code);
-          }
-          return;
-        }
-      }
-    }
-  }, [inputCommand, selectedDeviceId]);
+  }, [selectedDeviceId]);
 
   const handleRestart = async () => {
     if (!selectedDeviceId) return;
     if (!confirm("Are you sure you want to restart the agent on this device?")) return;
     
-    const maxRetries = 3;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-        await addDoc(commandsRef, {
-          type: 'restart',
-          command: 'Restart Agent', 
-          status: 'pending',
-          created_at: serverTimestamp()
-        });
-        return; // Success
-      } catch (error: any) {
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Network error sending restart command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error sending restart command:", error);
-          alert(`Failed to send restart command${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
-          return;
-        }
-      }
+    try {
+      const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
+      await addDoc(commandsRef, {
+        type: 'restart',
+        command: 'Restart Agent', 
+        status: 'pending',
+        created_at: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Error sending restart command:", error);
+      alert("Failed to send restart command");
     }
   };
-
-  const killCommand = async (cmdId: string) => {
-    if (!selectedDeviceId) return;
-    const maxRetries = 2;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const commandRef = doc(db, "devices", selectedDeviceId, "commands", cmdId);
-        await updateDoc(commandRef, {
-            kill_signal: true
-        });
-        return; // Success
-      } catch (error: any) {
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Network error killing command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error killing command:", error);
-          return;
-        }
-      }
-    }
-  };
-
-  const deleteCommand = async (logId: string, isActive: boolean = false) => {
-    if (!selectedDeviceId) return;
-    
-    const log = logs.find(l => l.id === logId);
-    const commandText = log?.command || 'this task';
-    const confirmMessage = isActive 
-      ? `Are you sure you want to delete the active task "${commandText}"? This will remove it from the history and may leave ghost processes running.`
-      : `Are you sure you want to delete "${commandText}"?`;
-    
-    if (!confirm(confirmMessage)) return;
-    
-    const maxRetries = 2;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        await deleteDoc(doc(db, "devices", selectedDeviceId, "commands", logId));
-        return; // Success
-      } catch (error: any) {
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Network error deleting command (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error deleting command:", error);
-          return;
-        }
-      }
-    }
-  };
-
-  const handleClearHistory = async () => {
-    if (!selectedDeviceId || historyLogs.length === 0) return;
-    if (!confirm("Clear terminal history? This cannot be undone.")) return;
-
-    const maxRetries = 2;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const batch = writeBatch(db);
-        historyLogs.forEach(log => {
-          const docRef = doc(db, "devices", selectedDeviceId, "commands", log.id);
-          batch.delete(docRef);
-        });
-        await batch.commit();
-        return; // Success
-      } catch (error: any) {
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Network error clearing history (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error clearing history:", error);
-          alert(`Failed to clear history${attempt === maxRetries - 1 ? ` after ${maxRetries} attempts` : ''}: ${error?.message || 'Network error'}`);
-          return;
-        }
-      }
-    }
-  };
-
-  const toggleLogExpansion = useCallback((logId: string) => {
-    setExpandedLogs(prev => {
-        const next = new Set(prev);
-        if (next.has(logId)) {
-            next.delete(logId);
-        } else {
-            next.add(logId);
-        }
-        return next;
-    });
-  }, []);
-
-  const manualRefresh = async () => {
-    if (!selectedDeviceId || !user) return;
-    setIsRefreshing(true);
-    
-    const maxRetries = 3;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
-        const q = query(commandsRef, orderBy("created_at", "desc"), limit(50));
-        const snapshot = await getDocs(q);
-        
-        const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as CommandLog));
-        setLogs(newLogs);
-        setTimeout(() => setIsRefreshing(false), 500);
-        return; // Success
-      } catch (error: any) {
-        const isNetworkError = error?.code === 'unavailable' || 
-                              error?.code === 'deadline-exceeded' ||
-                              error?.message?.includes('network') ||
-                              error?.message?.includes('fetch');
-        
-        if (isNetworkError && attempt < maxRetries - 1) {
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Network error refreshing logs (attempt ${attempt + 1}/${maxRetries}), retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.error("Error refreshing logs:", error);
-          setTimeout(() => setIsRefreshing(false), 500);
-          return;
-        }
-      }
-    }
-  };
-
-  const getLastLines = useMemo(() => {
-    return (text: string | undefined, maxLines: number = 10): string => {
-      if (!text) return '';
-      const lines = text.split('\n');
-      if (lines.length <= maxLines) return text;
-      return lines.slice(-maxLines).join('\n');
-    };
-  }, []);
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -590,381 +128,200 @@ export default function Home() {
     }
   };
 
-  const runningLogs = useMemo(() => 
-    logs.filter(log => ['pending', 'processing'].includes(log.status)), 
-    [logs]
-  );
-  const historyLogs = useMemo(() => 
-    logs.filter(log => !['pending', 'processing'].includes(log.status)), 
-    [logs]
-  );
+  // Loading state
+  if (authLoading) {
+    return (
+      <div className="h-dvh w-screen flex items-center justify-center bg-black text-gray-500 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-terminal-accent/30 border-t-terminal-accent rounded-full animate-spin" />
+          <span>Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
-  let mainContent: ReactNode;
+  // Login screen
+  if (!user) {
+    return (
+      <div className="h-dvh w-screen flex flex-col items-center justify-center bg-black text-white gap-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold mb-2 text-terminal-accent">DontPortForward</h1>
+          <p className="text-gray-500 text-sm">Remote Console Access</p>
+        </div>
+        {errorMsg && (
+          <div className="bg-terminal-error/10 border border-terminal-error/50 text-terminal-error px-4 py-2 rounded-lg max-w-md text-center text-sm">
+            {errorMsg}
+          </div>
+        )}
+        <button 
+          onClick={handleLogin}
+          className="bg-white text-black px-6 py-3 rounded-lg font-bold hover:bg-gray-100 transition-colors flex items-center gap-3 shadow-lg"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+            <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+            <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+            <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+          </svg>
+          Sign in with Google
+        </button>
+      </div>
+    );
+  }
 
+  // Main content based on view mode
+  let mainContent;
   if (viewMode === 'files') {
     mainContent = (
       <SharedFolder 
         deviceId={selectedDeviceId} 
-        onRunCommand={(cmd) => sendCommand(undefined, cmd)}
+        onRunCommand={sendCommand}
       />
     );
   } else if (viewMode === 'api') {
     mainContent = <ApiExplorer deviceId={selectedDeviceId} />;
   } else if (viewMode === 'status') {
     mainContent = <DeviceStatus deviceId={selectedDeviceId} />;
+  } else if (selectedDeviceId && user) {
+    mainContent = <ConsoleView deviceId={selectedDeviceId} user={user} />;
   } else {
+    // No device selected
     mainContent = (
-      <div className="flex flex-col h-full">
-        {/* Error Banner */}
-        {errorMsg && (
-          <div className="bg-red-500/10 border-b border-red-500/50 text-red-400 px-4 py-2 text-sm flex items-center justify-between">
-            <span>{errorMsg}</span>
-            <button 
-              onClick={() => setErrorMsg("")}
-              className="text-red-400 hover:text-red-300 ml-4"
-              aria-label="Dismiss error"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        )}
-        {showConnectionWarning && (
-          <div className="bg-yellow-500/10 border-b border-yellow-500/50 text-yellow-400 px-4 py-2 text-sm flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <span>Connection issues detected. Check if a browser extension is blocking Firestore requests. Updates temporarily reduced.</span>
-            </div>
-            <button 
-              onClick={() => setShowConnectionWarning(false)}
-              className="text-yellow-400 hover:text-yellow-300 ml-4 shrink-0"
-              aria-label="Dismiss warning"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        )}
-        {/* Terminal Output */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4 scrollbar-thin scrollbar-thumb-gray-800 font-mono text-sm relative">
-            <div className="space-y-6">
-            {selectedDeviceId && (
-              <ConsoleToolbar
-                runningCount={runningLogs.length}
-                onRequestOutput={requestOutputForActiveCommands}
-                isRequesting={isRequestingOutput}
-                onRefresh={manualRefresh}
-                isRefreshing={isRefreshing}
-                autoPollingEnabled={autoPollingEnabled}
-                onToggleAutoPolling={() => setAutoPollingEnabled(!autoPollingEnabled)}
-                className="-mx-3 sm:-mx-4"
-              />
-            )}
-            {!selectedDeviceId && (
-                <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
-                    <div className="w-12 h-12 border-2 border-gray-700 rounded-lg flex items-center justify-center">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" /></svg>
-                    </div>
-                    <p>Select a device from the menu to connect.</p>
-                </div>
-            )}
-            
-            {selectedDeviceId && logs.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-gray-600">
-                     <p>Ready. Enter a command to begin.</p>
-                </div>
-            )}
-            
-            {/* Running Processes Section */}
-            {selectedDeviceId && runningLogs.length > 0 && (
-                <div className="space-y-3 pb-2">
-                    <div className="bg-gray-950/80 backdrop-blur-sm py-2 -mt-2 border-b border-blue-500/20">
-                        <h3 className="text-xs uppercase tracking-wider text-blue-400 font-bold flex items-center gap-2">
-                            <span className="relative flex h-3 w-3">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-                            </span>
-                            Active Processes ({runningLogs.length})
-                            <span className="ml-auto text-[10px] text-blue-400/50 normal-case tracking-normal">Real-time updates</span>
-                        </h3>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3">
-                        {runningLogs.map(log => (
-                            <ActiveCommandCard
-                                key={log.id}
-                                log={log}
-                                onKill={killCommand}
-                                onDelete={(id) => deleteCommand(id, true)}
-                                getLastLines={getLastLines}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Recent History Section */}
-            {selectedDeviceId && historyLogs.length > 0 && (
-                <div className="space-y-3 pt-4">
-                    <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-xs uppercase tracking-wider text-gray-500 font-bold">
-                            Recent History
-                        </h3>
-                        <button
-                            onClick={handleClearHistory}
-                            className="text-[10px] text-gray-500 hover:text-red-400 uppercase tracking-wider transition-colors flex items-center gap-1 hover:bg-red-500/10 px-2 py-1 rounded"
-                        >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            Clear
-                        </button>
-                    </div>
-                    <div className="space-y-2">
-                        {historyLogs.map(log => (
-                            <HistoryCommandItem
-                                key={log.id}
-                                log={log}
-                                isExpanded={expandedLogs.has(log.id)}
-                                onToggle={toggleLogExpansion}
-                                onDelete={(id) => deleteCommand(id, false)}
-                                onRunAgain={(command) => sendCommand(undefined, command)}
-                                getLastLines={getLastLines}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
-
+      <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
+        <div className="w-16 h-16 border-2 border-gray-700 rounded-xl flex items-center justify-center">
+          <svg className="w-8 h-8 text-terminal-accent/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
         </div>
-
-        {/* Input Area */}
-        <div className="bg-gray-900 p-3 border-t border-gray-800 shrink-0 relative z-20 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-            
-            {/* Suggestions Popup */}
-            {showSuggestions && (
-                <div className="absolute bottom-full left-3 mb-2 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl overflow-hidden w-64 max-h-48 overflow-y-auto z-50">
-                    {suggestions.map((suggestion, index) => (
-                        <div 
-                            key={suggestion}
-                            className={`px-4 py-2.5 cursor-pointer text-sm font-mono border-b border-gray-700/50 last:border-0 ${
-                                index === suggestionIndex ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
-                            }`}
-                            onClick={() => {
-                                setInputCommand(suggestion);
-                                setShowSuggestions(false);
-                            }}
-                        >
-                            {suggestion}
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            <form onSubmit={sendCommand} className="flex gap-2 items-end max-w-4xl mx-auto">
-                <div className="relative flex-1 bg-gray-950 border border-gray-700 rounded-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500/20 transition-all flex items-center">
-                    <span className="pl-3 text-blue-500 select-none font-bold">{'>'}</span>
-                    <input
-                        type="text"
-                        value={inputCommand}
-                        onChange={handleInputChange}
-                        onKeyDown={handleKeyDown}
-                        className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 font-mono text-sm py-3 pl-2 pr-3 disabled:opacity-50"
-                        placeholder={selectedDeviceId ? "Enter command..." : "Select a device first"}
-                        autoFocus
-                        disabled={!selectedDeviceId}
-                        autoComplete="off"
-                    />
-                </div>
-                <button 
-                    type="submit"
-                    disabled={!inputCommand.trim() || !selectedDeviceId}
-                    className="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 rounded-lg text-white font-medium transition-colors shadow-lg shadow-blue-900/20 flex items-center justify-center"
-                >
-                   <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
-                </button>
-            </form>
-        </div>
+        <p className="text-gray-500">Select a device from the menu to connect.</p>
       </div>
-    </div>
     );
   }
 
-  if (authLoading) {
-      return <div className="h-screen w-screen flex items-center justify-center bg-black text-gray-500">Loading...</div>;
-  }
-
-  if (!user) {
-      return (
-          <div className="h-screen w-screen flex flex-col items-center justify-center bg-black text-white gap-4">
-              <h1 className="text-2xl font-bold mb-4">DontPortForward Console</h1>
-              {errorMsg && (
-                <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-2 rounded max-w-md text-center">
-                  {errorMsg}
-                </div>
-              )}
-              <button 
-                onClick={handleLogin}
-                className="bg-white text-black px-6 py-3 rounded font-bold hover:bg-gray-200 transition-colors flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" viewBox="0 0 24 24">
-                    <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                    <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                    <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                    <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                </svg>
-                Sign in with Google
-              </button>
-          </div>
-      );
-  }
-
   return (
-    <main className="flex h-dvh bg-black text-gray-200 font-mono overflow-hidden relative selection:bg-gray-800">
+    <main className="flex h-dvh bg-black text-gray-200 font-mono overflow-hidden relative selection:bg-terminal-accent/30 pt-[env(safe-area-inset-top)]">
       
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
-          <div 
-            className="fixed inset-0 bg-black/80 z-40 md:hidden backdrop-blur-sm transition-opacity"
-            onClick={() => setIsSidebarOpen(false)}
-          />
+        <div 
+          className="fixed inset-0 bg-black/80 z-40 md:hidden backdrop-blur-sm transition-opacity"
+          onClick={() => setIsSidebarOpen(false)}
+        />
       )}
 
       {/* Sidebar */}
       <div className={`
-        fixed inset-y-0 left-0 z-50 w-[85vw] sm:w-72 md:w-64 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 bg-gray-900/95 border-r border-gray-800
+        fixed inset-y-0 left-0 z-50 w-[85vw] sm:w-72 md:w-64 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 bg-gray-900/95 border-r border-gray-800 pt-[env(safe-area-inset-top)]
         ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
       `}>
-         <div className="flex flex-col h-full">
-             <DeviceList 
-                onSelectDevice={handleDeviceSelect} 
-                selectedDeviceId={selectedDeviceId}
-                currentUserEmail={user.email}
-                className="flex-1" 
-             />
-             <div className="p-4 border-t border-gray-800 bg-gray-900/50">
-                 <div className="flex items-center gap-3 mb-2">
-                     {user.photoURL && (
-                         <Image 
-                           src={user.photoURL} 
-                           alt="User" 
-                           width={32}
-                           height={32}
-                           className="w-8 h-8 rounded-full" 
-                           referrerPolicy="no-referrer"
-                         />
-                     )}
-                     <div className="flex-1 min-w-0">
-                         <div className="text-sm font-medium text-white truncate">{user.displayName}</div>
-                         <div className="text-xs text-gray-500 truncate">{user.email}</div>
-                     </div>
-                 </div>
-                 <button 
-                    onClick={handleLogout}
-                    className="w-full text-left text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 p-2 rounded transition-colors flex items-center gap-2"
-                 >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-                    Sign Out
-                 </button>
-             </div>
-         </div>
+        <div className="flex flex-col h-full">
+          <DeviceList 
+            onSelectDevice={handleDeviceSelect} 
+            selectedDeviceId={selectedDeviceId}
+            currentUserEmail={user.email}
+            className="flex-1" 
+          />
+          <div className="p-4 border-t border-gray-800 bg-gray-900/50">
+            <div className="flex items-center gap-3 mb-3">
+              {user.photoURL && (
+                <Image 
+                  src={user.photoURL} 
+                  alt="User" 
+                  width={32}
+                  height={32}
+                  className="w-8 h-8 rounded-full ring-2 ring-gray-800" 
+                  referrerPolicy="no-referrer"
+                />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-white truncate">{user.displayName}</div>
+                <div className="text-xs text-gray-500 truncate">{user.email}</div>
+              </div>
+            </div>
+            <button 
+              onClick={handleLogout}
+              className="w-full text-left text-xs text-terminal-error hover:text-red-300 hover:bg-terminal-error/10 p-2 rounded-lg transition-colors flex items-center gap-2"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              Sign Out
+            </button>
+          </div>
+        </div>
       </div>
 
+      {/* Main Content */}
       <div className="flex-1 flex flex-col h-full overflow-hidden w-full bg-gray-950">
-          {/* Header */}
-          <header className="bg-gray-900/50 backdrop-blur border-b border-gray-800 h-14 flex items-center justify-between px-4 shrink-0 gap-3">
-            <div className="flex items-center gap-3 overflow-hidden">
-                {/* Hamburger Menu */}
-                <button 
-                    className="md:hidden text-gray-400 hover:text-white p-1 -ml-1"
-                    onClick={() => setIsSidebarOpen(true)}
-                    aria-label="Toggle Menu"
-                >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                    </svg>
-                </button>
-                
-                <div className="flex flex-col min-w-0">
-                   <h1 className="font-bold text-sm sm:text-base leading-none tracking-tight truncate">
-                       {selectedDeviceId ? (
-                           <span className="text-white">{selectedDeviceId}</span>
-                       ) : (
-                           <span className="text-gray-500">Select Device</span>
-                       )}
-                   </h1>
-                   {selectedDeviceId && (
-                       <span className="text-[10px] text-gray-500 leading-none mt-1 truncate">
-                           Connected
-                       </span>
-                   )}
-                </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-2 shrink-0">
-                {selectedDeviceId && (
-                    <>
-                        <div className="flex bg-gray-800/50 rounded-lg p-0.5">
-                            <button 
-                                onClick={() => setViewMode('console')} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                                    viewMode === 'console' 
-                                    ? 'bg-gray-700 text-white shadow-sm' 
-                                    : 'text-gray-400 hover:text-gray-300'
-                                }`}
-                            >
-                                Term
-                            </button>
-                            <button 
-                                onClick={() => setViewMode('files')} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                                    viewMode === 'files' 
-                                    ? 'bg-gray-700 text-white shadow-sm' 
-                                    : 'text-gray-400 hover:text-gray-300'
-                                }`}
-                            >
-                                Files
-                            </button>
-                            <button 
-                                onClick={() => setViewMode('api')} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                                    viewMode === 'api' 
-                                    ? 'bg-gray-700 text-white shadow-sm' 
-                                    : 'text-gray-400 hover:text-gray-300'
-                                }`}
-                            >
-                                API
-                            </button>
-                            <button 
-                                onClick={() => setViewMode('status')} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                                    viewMode === 'status' 
-                                    ? 'bg-gray-700 text-white shadow-sm' 
-                                    : 'text-gray-400 hover:text-gray-300'
-                                }`}
-                            >
-                                Info
-                            </button>
-                        </div>
-
-                        <button
-                            onClick={handleRestart}
-                            className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors"
-                            title="Restart Agent"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                        </button>
-                    </>
+        {/* Header */}
+        <header className="bg-gray-900/50 backdrop-blur-lg border-b border-gray-800 h-14 flex items-center justify-between px-4 shrink-0 gap-3">
+          <div className="flex items-center gap-3 overflow-hidden">
+            {/* Hamburger Menu */}
+            <button 
+              className="md:hidden text-gray-400 hover:text-white p-1.5 -ml-1 rounded-lg hover:bg-gray-800 transition-colors"
+              onClick={() => setIsSidebarOpen(true)}
+              aria-label="Toggle Menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            
+            <div className="flex flex-col min-w-0">
+              <h1 className="font-bold text-sm sm:text-base leading-none tracking-tight truncate">
+                {selectedDeviceId ? (
+                  <span className="text-white">{selectedDeviceId}</span>
+                ) : (
+                  <span className="text-gray-500">Select Device</span>
                 )}
+              </h1>
+              {selectedDeviceId && (
+                <span className="text-[10px] text-terminal-accent/70 leading-none mt-1 truncate flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-terminal-success animate-pulse" />
+                  Connected
+                </span>
+              )}
             </div>
-          </header>
+          </div>
 
-          {/* Main Content Area */}
-          {mainContent}
+          {/* View Mode Tabs & Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            {selectedDeviceId && (
+              <>
+                {/* View Mode Switcher */}
+                <div className="flex bg-gray-800/50 rounded-lg p-0.5 border border-gray-700/50">
+                  {(['console', 'files', 'api', 'status'] as const).map((mode) => (
+                    <button 
+                      key={mode}
+                      onClick={() => setViewMode(mode)} 
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                        viewMode === mode 
+                          ? 'bg-terminal-accent text-gray-950 shadow-sm' 
+                          : 'text-gray-400 hover:text-gray-300 hover:bg-gray-700/50'
+                      }`}
+                    >
+                      {mode === 'console' ? 'Term' : mode === 'status' ? 'Info' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Restart Button */}
+                <button
+                  onClick={handleRestart}
+                  className="p-2 text-gray-400 hover:text-terminal-error hover:bg-terminal-error/10 rounded-lg transition-colors"
+                  title="Restart Agent"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
+        </header>
+
+        {/* Main Content Area */}
+        {mainContent}
       </div>
     </main>
   );

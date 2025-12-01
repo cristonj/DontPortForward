@@ -21,72 +21,107 @@ export default function ConsoleToolbar({
   onToggleAutoPolling,
   className = "",
 }: ConsoleToolbarProps) {
-  const baseClass =
-    "sticky top-0 z-20 bg-gray-950/95 backdrop-blur border-b border-gray-900/60 shadow-[0_16px_32px_rgba(0,0,0,0.4)]";
-
   return (
-    <div className={`${baseClass} ${className}`}>
+    <div className={`console-toolbar sticky top-0 z-20 bg-gray-950/95 backdrop-blur-xl border-b border-gray-800/50 shadow-[0_8px_32px_rgba(0,0,0,0.4)] ${className}`}>
       <div className="px-3 sm:px-4 py-3 flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap text-[11px] uppercase tracking-[0.2em] text-gray-500">
-          <span>Console Controls</span>
+        {/* Header row */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-terminal-accent" />
+            <span className="text-[11px] uppercase tracking-[0.2em] text-gray-400 font-semibold">
+              Console
+            </span>
+          </div>
           {runningCount > 0 && (
-            <span className="text-[10px] text-blue-400 tracking-wide">Active: {runningCount}</span>
+            <span className="px-2 py-0.5 rounded-full bg-terminal-accent/15 text-terminal-accent text-[10px] font-bold tracking-wide border border-terminal-accent/30">
+              {runningCount} ACTIVE
+            </span>
           )}
         </div>
+
+        {/* Action buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Request Output Button */}
           <button
             onClick={onRequestOutput}
             disabled={runningCount === 0 || isRequesting}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
-              runningCount === 0
-                ? "bg-gray-900 text-gray-500 border-gray-800 cursor-not-allowed opacity-60"
-                : "bg-blue-600/90 hover:bg-blue-500 border-blue-500/50 text-white shadow-lg shadow-blue-900/20"
-            } ${isRequesting ? "animate-pulse" : ""}`}
+            className={`toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
+              runningCount === 0 || isRequesting
+                ? "bg-gray-900/60 text-gray-600 border border-gray-800/50 cursor-not-allowed opacity-60"
+                : "toolbar-button-primary"
+            }`}
             title="Request output for active commands"
           >
-            <svg className={`w-4 h-4 ${isRequesting ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <svg 
+              className={`w-4 h-4 transition-transform ${isRequesting ? "animate-spin" : ""}`} 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
+              />
             </svg>
-            {isRequesting ? "Requesting..." : "Request Output"}
+            <span className="hidden sm:inline">
+              {isRequesting ? "Requesting..." : "Get Output"}
+            </span>
           </button>
 
+          {/* Refresh Button */}
           <button
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all border border-gray-800 bg-gray-900/80 hover:bg-gray-800 text-gray-300 disabled:opacity-60"
+            className="toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-gray-900/80 text-gray-300 border border-gray-700/60 hover:bg-gray-800 hover:border-gray-600 disabled:opacity-50 transition-all duration-200"
             title="Refresh command logs"
           >
-            <svg className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <svg 
+              className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
+              />
             </svg>
-            {isRefreshing ? "Refreshing..." : "Refresh Logs"}
+            <span className="hidden sm:inline">
+              {isRefreshing ? "Syncing..." : "Refresh"}
+            </span>
           </button>
 
+          {/* Auto-polling Toggle */}
           <button
             onClick={onToggleAutoPolling}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+            className={`toolbar-button flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 ${
               autoPollingEnabled
-                ? "bg-green-600/90 hover:bg-green-500 border-green-500/50 text-white"
-                : "bg-gray-900/80 hover:bg-gray-800 border-gray-800 text-gray-300"
+                ? "toolbar-button-live shadow-lg shadow-green-900/30"
+                : "bg-gray-900/80 text-gray-400 border border-gray-700/60 hover:bg-gray-800 hover:text-gray-300"
             }`}
             aria-pressed={autoPollingEnabled}
             title={autoPollingEnabled ? "Disable auto-polling" : "Enable auto-polling (30s updates)"}
           >
-            <span className="relative flex h-2 w-2">
+            <span className="relative flex h-2.5 w-2.5">
               {autoPollingEnabled ? (
                 <>
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]" />
                 </>
               ) : (
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-gray-600" />
               )}
             </span>
-            {autoPollingEnabled ? "Live" : "Manual"}
+            <span className="hidden sm:inline font-semibold">
+              {autoPollingEnabled ? "Live" : "Manual"}
+            </span>
           </button>
         </div>
       </div>
     </div>
   );
 }
-
