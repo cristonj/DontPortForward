@@ -78,6 +78,32 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     return [...unconfirmedOptimistic, ...serverLogs];
   }, [serverLogs, optimisticCommands]);
 
+  // Request output for all active commands (used when page becomes visible)
+  const requestOutputNow = useCallback(async (logsToCheck: CommandLog[]) => {
+    if (!deviceId) return;
+    
+    const activeLogs = logsToCheck.filter(log => 
+      ACTIVE_COMMAND_STATUSES.includes(log.status) && 
+      !log.id.startsWith(OPTIMISTIC_ID_PREFIX)
+    );
+    if (activeLogs.length === 0) return;
+    
+    // Request output for all active commands in parallel
+    await Promise.all(activeLogs.map(async (log) => {
+      try {
+        const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
+        await updateDoc(commandRef, {
+          output_request: {
+            seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
+            request_id: `${Date.now()}-${Math.random()}`
+          }
+        });
+      } catch (error) {
+        console.debug("Could not request output for command:", log.id, error);
+      }
+    }));
+  }, [deviceId]);
+
   // Listen for command logs - pause when page is hidden to reduce reads
   useEffect(() => {
     if (!deviceId || !user) {
@@ -88,6 +114,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
 
     let unsubscribe: (() => void) | null = null;
     let isSubscribed = false;
+    let latestLogs: CommandLog[] = [];
 
     const subscribe = () => {
       if (isSubscribed) return;
@@ -100,6 +127,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
           id: doc.id,
           ...doc.data()
         } as CommandLog));
+        latestLogs = newLogs;
         setServerLogs(newLogs);
         
         // Clean up any optimistic commands that have been confirmed by the server
@@ -136,8 +164,14 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
         // Page is hidden - stop listening to reduce reads
         unsubscribeListener();
       } else {
-        // Page is visible - resume listening
+        // Page is visible - resume listening and immediately request output
         subscribe();
+        // Small delay to let onSnapshot fetch latest logs first
+        setTimeout(() => {
+          if (latestLogs.length > 0) {
+            requestOutputNow(latestLogs);
+          }
+        }, 100);
       }
     };
 
@@ -152,7 +186,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       unsubscribeListener();
     };
-  }, [deviceId, user]);
+  }, [deviceId, user, requestOutputNow]);
 
   const requestOutputForActiveCommands = useCallback(async () => {
     if (!deviceId || !user) return;
