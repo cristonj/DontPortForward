@@ -6,7 +6,6 @@ import {
   collection, 
   query, 
   orderBy, 
-  onSnapshot, 
   addDoc, 
   serverTimestamp,
   limit,
@@ -78,33 +77,55 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     return [...unconfirmedOptimistic, ...serverLogs];
   }, [serverLogs, optimisticCommands]);
 
-  // Request output for all active commands (used when page becomes visible)
-  const requestOutputNow = useCallback(async (logsToCheck: CommandLog[]) => {
-    if (!deviceId) return;
+  // Single fetch - no continuous listening, only reads when needed
+  const fetchLogs = useCallback(async (requestOutput = false) => {
+    if (!deviceId || !user) return;
     
-    const activeLogs = logsToCheck.filter(log => 
-      ACTIVE_COMMAND_STATUSES.includes(log.status) && 
-      !log.id.startsWith(OPTIMISTIC_ID_PREFIX)
-    );
-    if (activeLogs.length === 0) return;
-    
-    // Request output for all active commands in parallel
-    await Promise.all(activeLogs.map(async (log) => {
-      try {
-        const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
-        await updateDoc(commandRef, {
-          output_request: {
-            seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-            request_id: `${Date.now()}-${Math.random()}`
-          }
+    try {
+      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
+      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
+      const snapshot = await getDocs(q);
+      
+      const newLogs: CommandLog[] = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      } as CommandLog));
+      
+      setServerLogs(newLogs);
+      
+      // Clean up optimistic commands that are now on server
+      setOptimisticCommands(prev => {
+        if (prev.length === 0) return prev;
+        return prev.filter(opt => {
+          const hasMatch = newLogs.some(
+            serverLog => serverLog.command === opt.command && 
+            ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
+          );
+          return !hasMatch;
         });
-      } catch (error) {
-        console.debug("Could not request output for command:", log.id, error);
+      });
+      
+      // Request output for active commands if requested
+      if (requestOutput) {
+        const activeLogs = newLogs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
+        if (activeLogs.length > 0) {
+          // Fire and forget - don't await, agent will update and we'll see it on next fetch
+          Promise.all(activeLogs.map(log => 
+            updateDoc(doc(db, ...getCommandDocumentPath(deviceId, log.id)), {
+              output_request: {
+                seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
+                request_id: `${Date.now()}-${Math.random()}`
+              }
+            }).catch(() => {})
+          ));
+        }
       }
-    }));
-  }, [deviceId]);
+    } catch (error) {
+      console.error("Error fetching logs:", error);
+    }
+  }, [deviceId, user]);
 
-  // Listen for command logs - pause when page is hidden to reduce reads
+  // Fetch on mount and when page becomes visible
   useEffect(() => {
     if (!deviceId || !user) {
       setServerLogs([]);
@@ -112,112 +133,33 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       return;
     }
 
-    let unsubscribe: (() => void) | null = null;
-    let isSubscribed = false;
-    let latestLogs: CommandLog[] = [];
-
-    const subscribe = () => {
-      if (isSubscribed) return;
-      
-      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
-
-      unsubscribe = onSnapshot(q, (snapshot) => {
-        const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as CommandLog));
-        latestLogs = newLogs;
-        setServerLogs(newLogs);
-        
-        // Clean up any optimistic commands that have been confirmed by the server
-        setOptimisticCommands(prev => {
-          if (prev.length === 0) return prev;
-          return prev.filter(opt => {
-            const hasMatch = newLogs.some(
-              serverLog => serverLog.command === opt.command && 
-              ACTIVE_COMMAND_STATUSES.includes(serverLog.status)
-            );
-            return !hasMatch;
-          });
-        });
-      }, (error) => {
-        if (error.code === 'permission-denied') {
-          console.debug("Logs permission denied (possibly logged out)");
-        } else {
-          console.error("Error fetching logs:", error);
-        }
-      });
-      isSubscribed = true;
-    };
-
-    const unsubscribeListener = () => {
-      if (unsubscribe) {
-        unsubscribe();
-        unsubscribe = null;
-      }
-      isSubscribed = false;
-    };
+    // Initial fetch with output request
+    fetchLogs(true);
 
     const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // Page is hidden - stop listening to reduce reads
-        unsubscribeListener();
-      } else {
-        // Page is visible - resume listening and immediately request output
-        subscribe();
-        // Small delay to let onSnapshot fetch latest logs first
-        setTimeout(() => {
-          if (latestLogs.length > 0) {
-            requestOutputNow(latestLogs);
-          }
-        }, 100);
+      if (!document.hidden) {
+        // Page visible - fetch and request output
+        fetchLogs(true);
       }
     };
 
-    // Subscribe initially if page is visible
-    if (!document.hidden) {
-      subscribe();
-    }
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      unsubscribeListener();
-    };
-  }, [deviceId, user, requestOutputNow]);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [deviceId, user, fetchLogs]);
 
   const requestOutputForActiveCommands = useCallback(async () => {
     if (!deviceId || !user) return;
     
     setIsRequestingOutput(true);
     try {
-      const activeLogs = logs.filter(log => ACTIVE_COMMAND_STATUSES.includes(log.status));
-      if (activeLogs.length === 0) {
-        setIsRequestingOutput(false);
-        return;
-      }
-      
-      const requests = activeLogs.map(async (log) => {
-        try {
-          const commandRef = doc(db, ...getCommandDocumentPath(deviceId, log.id));
-          await updateDoc(commandRef, {
-            output_request: {
-              seconds: CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
-              request_id: `${Date.now()}-${Math.random()}`
-            }
-          });
-        } catch (error) {
-          console.debug("Could not request output for command:", log.id, error);
-        }
-      });
-      
-      await Promise.all(requests);
+      // Request output and fetch in one go
+      await fetchLogs(true);
+      // Fetch again after agent has time to respond
+      setTimeout(() => fetchLogs(false), 1000);
     } finally {
       setIsRequestingOutput(false);
     }
-  }, [deviceId, user, logs]);
+  }, [deviceId, user, fetchLogs]);
 
   const sendCommand = useCallback((command: string) => {
     if (!command.trim() || !deviceId) return;
@@ -243,6 +185,9 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       type: COMMAND_TYPE_SHELL,
       status: COMMAND_STATUS_PENDING,
       created_at: serverTimestamp()
+    }).then(() => {
+      // Fetch after a short delay to see the command on server
+      setTimeout(() => fetchLogs(false), 500);
     }).catch((error: unknown) => {
       // On error, remove the optimistic command and show error
       const err = error as { message?: string };
@@ -251,7 +196,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
       pendingCommandsRef.current.delete(optimisticId);
       setErrorMsg(`Error: ${err?.message || "Failed to send command"}`);
     });
-  }, [deviceId]);
+  }, [deviceId, fetchLogs]);
 
   const killCommand = useCallback(async (cmdId: string) => {
     if (!deviceId) return;
@@ -335,21 +280,13 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     setIsRefreshing(true);
     
     try {
-      const commandsRef = collection(db, ...getCommandsCollectionPath(deviceId));
-      const q = query(commandsRef, orderBy("created_at", "desc"), limit(CONSOLE_HISTORY_LIMIT));
-      const snapshot = await getDocs(q);
-      
-      const newLogs: CommandLog[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as CommandLog));
-      setServerLogs(newLogs);
-    } catch (error) {
-      console.error("Error refreshing logs:", error);
+      await fetchLogs(true);
+      // Fetch again after agent responds
+      setTimeout(() => fetchLogs(false), 1000);
     } finally {
       setTimeout(() => setIsRefreshing(false), CONSOLE_REFRESH_DELAY_MS);
     }
-  }, [deviceId, user]);
+  }, [deviceId, user, fetchLogs]);
 
   return (
     <div className="console-view flex flex-col flex-1 min-h-0">
@@ -364,23 +301,6 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
             onClick={() => setErrorMsg("")}
             className="text-terminal-error hover:text-terminal-error/80 ml-4 p-1 rounded hover:bg-terminal-error/10 transition-colors"
             aria-label="Dismiss error"
-          >
-            <CloseIcon className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Connection Warning */}
-      {showConnectionWarning && (
-        <div className="console-warning-banner bg-amber-500/10 border-b border-amber-500/40 text-amber-400 px-4 py-2.5 text-sm flex items-center justify-between backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <WarningIcon className="w-5 h-5 shrink-0" />
-            <span>Connection issues detected. Updates temporarily reduced.</span>
-          </div>
-          <button 
-            onClick={() => setShowConnectionWarning(false)}
-            className="text-amber-400 hover:text-amber-300 ml-4 p-1 rounded hover:bg-amber-500/10 transition-colors shrink-0"
-            aria-label="Dismiss warning"
           >
             <CloseIcon className="w-4 h-4" />
           </button>
