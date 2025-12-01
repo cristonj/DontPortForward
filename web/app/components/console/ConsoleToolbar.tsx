@@ -22,7 +22,7 @@ export default function ConsoleToolbar({
   className = "",
 }: ConsoleToolbarProps) {
   return (
-    <div className={`console-toolbar sticky top-0 z-20 bg-gray-950/95 backdrop-blur-xl border-b border-gray-800/50 shadow-[0_8px_32px_rgba(0,0,0,0.4)] ${className}`}>
+    <div className={`console-toolbar sticky top-0 -mt-2 z-20 bg-gray-950/95 backdrop-blur-xl border-b border-gray-800/50 shadow-[0_8px_32px_rgba(0,0,0,0.4)] ${className}`}>
       <div className="px-3 sm:px-4 py-3 flex flex-col gap-3">
         {/* Header row */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
