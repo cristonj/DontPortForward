@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
 import { 
@@ -12,7 +12,7 @@ import {
   getCommandDocumentPath
 } from "../constants";
 import { isNetworkError, getErrorMessage } from "../utils";
-import { LoadingSpinner } from "./ui";
+import { EndpointList, RequestPanel, ResponsePanel, CodeSnippet } from "./api";
 
 export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState(API_ENDPOINTS[0]);
@@ -20,98 +20,12 @@ export default function ApiExplorer({ deviceId }: { deviceId: string }) {
   const [response, setResponse] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [snippetLang, setSnippetLang] = useState<'python' | 'js'>('python');
 
   useEffect(() => {
     setRequestBody(selectedEndpoint.defaultBody || "");
   }, [selectedEndpoint]);
 
-  const getSnippet = () => {
-    let bodyObj = {};
-    try {
-        if (requestBody) bodyObj = JSON.parse(requestBody);
-    } catch {
-      // Ignore parse errors - use empty object
-    }
-    
-    if (snippetLang === 'python') {
-        const pythonBody = JSON.stringify(bodyObj, null, 4)
-            .replace(/true/g, 'True')
-            .replace(/false/g, 'False')
-            .replace(/null/g, 'None');
-
-        return `import firebase_admin
-from firebase_admin import credentials, firestore
-import time
-
-# Initialize (if not already done)
-if not firebase_admin._apps:
-    cred = credentials.Certificate('path/to/serviceAccountKey.json')
-    firebase_admin.initialize_app(cred)
-
-db = firestore.client()
-device_id = "${deviceId}"
-
-command = {
-    'type': '${API_COMMAND_TYPE}',
-    'endpoint': '${selectedEndpoint.path}',
-    'method': '${selectedEndpoint.method}',
-    'body': ${pythonBody}, 
-    'status': 'pending',
-    'created_at': firestore.SERVER_TIMESTAMP
-}
-
-_, doc_ref = db.collection('devices').document(device_id).collection('commands').add(command)
-print(f"Command sent: {doc_ref.id}")
-
-# Poll for result
-while True:
-    doc = doc_ref.get()
-    if doc.exists:
-        data = doc.to_dict()
-        if data.get('status') == 'completed':
-            print("Output:", data.get('output'))
-            break
-        elif data.get('status') == 'cancelled':
-            print("Cancelled")
-            break
-    time.sleep(1)`;
-    } else {
-        const jsBody = JSON.stringify(bodyObj, null, 2).replace(/\n/g, '\n  ');
-        return `// Using Firebase JS SDK
-import { db } from "./firebase-config";
-import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
-
-const deviceId = "${deviceId}";
-
-const command = {
-  type: 'api',
-  endpoint: '${selectedEndpoint.path}',
-  method: '${selectedEndpoint.method}',
-  body: ${jsBody},
-  status: 'pending',
-  created_at: serverTimestamp()
-};
-
-// Send command
-const docRef = await addDoc(collection(db, "devices", deviceId, "commands"), command);
-console.log("Command sent:", docRef.id);
-
-// Listen for result
-const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (snap) => {
-  const data = snap.data();
-  if (data?.status === 'completed') {
-    console.log("Response:", data.output);
-    unsub();
-  } else if (data?.status === 'cancelled') {
-    console.log("Cancelled");
-    unsub();
-  }
-});`;
-    }
-  };
-
-  const handleExecute = async () => {
+  const handleExecute = useCallback(async () => {
     if (!deviceId) return;
     setLoading(true);
     setResponse(null);
@@ -122,7 +36,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
       if (selectedEndpoint.method === 'POST' || selectedEndpoint.method === 'PUT') {
         try {
           if (requestBody) {
-             bodyData = JSON.parse(requestBody);
+            bodyData = JSON.parse(requestBody);
           }
         } catch {
           setError("Invalid JSON body");
@@ -146,13 +60,13 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
             created_at: serverTimestamp()
           });
           break; // Success
-        } catch (error) {
-          if (isNetworkError(error) && attempt < DEFAULT_MAX_RETRIES - 1) {
+        } catch (err) {
+          if (isNetworkError(err) && attempt < DEFAULT_MAX_RETRIES - 1) {
             const waitTime = Math.pow(2, attempt) * RETRY_BASE_DELAY_MS;
             console.log(`Network error sending API command (attempt ${attempt + 1}/${DEFAULT_MAX_RETRIES}), retrying in ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
           } else {
-            throw error; // Re-throw to be caught by outer catch
+            throw err; // Re-throw to be caught by outer catch
           }
         }
       }
@@ -172,9 +86,9 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
           setLoading(false);
           unsubscribe();
         } else if (data?.status === 'cancelled') {
-             setError("Request cancelled");
-             setLoading(false);
-             unsubscribe();
+          setError("Request cancelled");
+          setLoading(false);
+          unsubscribe();
         }
       });
 
@@ -183,7 +97,7 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
       setError(getErrorMessage(err, 'Unknown error'));
       setLoading(false);
     }
-  };
+  }, [deviceId, selectedEndpoint, requestBody]);
 
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 text-gray-200 font-mono overflow-y-auto md:overflow-hidden">
@@ -194,132 +108,33 @@ const unsub = onSnapshot(doc(db, "devices", deviceId, "commands", docRef.id), (s
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 md:min-h-0">
         {/* Sidebar: Endpoints */}
-        <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
-          <div className="p-3 border-b border-gray-800 bg-gray-900/80 font-bold text-sm text-gray-400 uppercase tracking-wider">
-            Endpoints
-          </div>
-          <div className="overflow-y-auto flex-1 p-2 space-y-1">
-            {API_ENDPOINTS.map((ep) => (
-              <button
-                key={ep.path}
-                onClick={() => setSelectedEndpoint(ep)}
-                className={`w-full text-left p-3 rounded-lg text-sm transition-colors flex items-center justify-between group ${
-                  selectedEndpoint.path === ep.path
-                    ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                    : "hover:bg-gray-800 text-gray-400"
-                }`}
-              >
-                <div className="font-mono truncate mr-2" title={ep.path}>{ep.path}</div>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 ${
-                    ep.method === 'GET' ? 'bg-green-500/20 text-green-400' : 
-                    ep.method === 'POST' ? 'bg-yellow-500/20 text-yellow-400' :
-                    'bg-red-500/20 text-red-400'
-                }`}>
-                    {ep.method}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <EndpointList
+          endpoints={API_ENDPOINTS}
+          selectedEndpoint={selectedEndpoint}
+          onSelect={setSelectedEndpoint}
+        />
 
         {/* Main Area: Request & Response */}
         <div className="md:col-span-2 flex flex-col gap-4 md:min-h-0">
-            {/* Request Details */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-5 flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                     <span className={`text-sm font-bold px-2 py-1 rounded ${
-                        selectedEndpoint.method === 'GET' ? 'bg-green-500/20 text-green-400' : 
-                        selectedEndpoint.method === 'POST' ? 'bg-yellow-500/20 text-yellow-400' :
-                        'bg-red-500/20 text-red-400'
-                     }`}>
-                         {selectedEndpoint.method}
-                     </span>
-                     <span className="text-lg text-white font-mono break-all">{selectedEndpoint.path}</span>
-                </div>
-                <p className="text-gray-400 text-sm">{selectedEndpoint.description}</p>
-                
-                {(selectedEndpoint.method === 'POST' || selectedEndpoint.method === 'PUT') && (
-                  <div className="flex flex-col gap-2">
-                    <label className="text-xs text-gray-500 uppercase font-bold">Request Body (JSON)</label>
-                    <textarea
-                      value={requestBody}
-                      onChange={(e) => setRequestBody(e.target.value)}
-                      className="w-full h-32 bg-black border border-gray-800 rounded-lg p-3 font-mono text-xs text-gray-300 focus:border-blue-500 focus:outline-none resize-none"
-                    />
-                  </div>
-                )}
+          <RequestPanel
+            endpoint={selectedEndpoint}
+            requestBody={requestBody}
+            onRequestBodyChange={setRequestBody}
+            onExecute={handleExecute}
+            isLoading={loading}
+          />
 
-                <button
-                    onClick={handleExecute}
-                    disabled={loading}
-                    className={`mt-2 px-6 py-2 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                        loading 
-                        ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                        : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
-                    }`}
-                >
-                    {loading ? (
-                        <>
-                            <LoadingSpinner size="sm" color="white" />
-                            Sending Request...
-                        </>
-                    ) : (
-                        <>
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                            Send Request
-                        </>
-                    )}
-                </button>
-            </div>
+          <ResponsePanel
+            response={response}
+            error={error}
+            isLoading={loading}
+          />
 
-            {/* Response Area */}
-            <div className="flex-1 bg-black border border-gray-800 rounded-xl p-4 font-mono text-xs overflow-hidden flex flex-col min-h-[300px]">
-                <div className="text-gray-500 uppercase tracking-wider text-[10px] font-bold mb-2 flex justify-between">
-                    <span>Response Body</span>
-                    {response && <span className="text-green-500">200 OK</span>}
-                    {error && <span className="text-red-500">Error</span>}
-                </div>
-                <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-gray-800">
-                    {loading && <div className="text-gray-600 italic">Waiting for response...</div>}
-                    {!loading && !response && !error && <div className="text-gray-700 italic">No response yet.</div>}
-                    {error && <div className="text-red-400 whitespace-pre-wrap">{error}</div>}
-                    {response && (
-                        <pre className="text-green-300 whitespace-pre-wrap">
-                            {response}
-                        </pre>
-                    )}
-                </div>
-            </div>
-
-            {/* Integration Snippet */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden flex flex-col shrink-0">
-                <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900/80">
-                    <span className="font-bold text-sm text-gray-400 uppercase tracking-wider">Access in your app</span>
-                    <div className="flex bg-black rounded-lg p-0.5 border border-gray-800">
-                        <button
-                            onClick={() => setSnippetLang('python')}
-                            className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${
-                                snippetLang === 'python' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'
-                            }`}
-                        >
-                            PYTHON
-                        </button>
-                        <button
-                            onClick={() => setSnippetLang('js')}
-                            className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${
-                                snippetLang === 'js' ? 'bg-gray-800 text-yellow-400' : 'text-gray-500 hover:text-gray-300'
-                            }`}
-                        >
-                            JAVASCRIPT
-                        </button>
-                    </div>
-                </div>
-                <div className="p-4 bg-black overflow-x-auto max-h-60 scrollbar-thin scrollbar-thumb-gray-800">
-                    <pre className="text-[10px] sm:text-xs text-gray-300 font-mono whitespace-pre selection:bg-gray-700 selection:text-white">
-                        {getSnippet()}
-                    </pre>
-                </div>
-            </div>
+          <CodeSnippet
+            deviceId={deviceId}
+            endpoint={selectedEndpoint}
+            requestBody={requestBody}
+          />
         </div>
       </div>
     </div>
