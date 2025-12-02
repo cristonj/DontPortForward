@@ -12,7 +12,7 @@
 *  **Wrapper**: This python script pulls changes from github to keep the agent up to date. It also helps with platform compatibility, and is where the sleep timeout and automatic system reboot interval are set.
 *  **Agent**: Runs on the target device (Linux, Windows, macOS). Polls Firestore for commands to run, hosts the API, pushes status, and syncs files from github/shared files.
 *  **Web Console**: Next.js app to view devices, send commands, and manage files. I use netlify to host it. The instructions assume you know how to host a nextjs app.
-*  **Google Firebase**: In these instructions we will use this for our realtime database, storage and authentication provider.
+*  **Google Firebase**: This is our database, storage and authentication provider it also functions as the secure bridge between the agent and the webapp.
 
 ### Command execution follows this flow: 
 *  Authenticated user sends console command from webapp.
@@ -24,14 +24,14 @@
 ### Initial Setup Instructions
     
 1.  Fork this repo and clone on the device you want to remote control.
-2.  Create a Firebase project. If you expect to use this a lot, enable the "Blaze" plan; It does take a card, but the free usage is generous and past that 100,000 reads is 3 cents.
-3.  Enable **Firestore Database** and **Storage**.
-4.  Enable **Authentication** and add the **Google** provider.
-5.  Copy `firestore.rules` content to Firestore Rules in Firebase Console.
-6.  Copy `storage.rules` content to Storage Rules in Firebase Console.
-7.  Generate a Service Account Key (for the agent) and save as `agent/serviceAccountKey.json`.
-8.  Create a web app in Firebase project settings and get the config keys.
-9.  Create a `web/.env.local` containing your Firebase config keys:
+2.  Create a Firebase project. If you expect to use this a lot, enable the "Blaze" plan; It does take a card, but the free usage is generous and past that 100,000 reads is 3 cents.    
+4.  Enable **Firestore Database** and **Storage**.
+5.  Enable **Authentication** and add the **Google** provider.
+6.  Copy `firestore.rules` content to Firestore Rules in Firebase Console.
+7.  Copy `storage.rules` content to Storage Rules in Firebase Console.
+8.  Generate a Service Account Key (for the agent) and save as `agent/serviceAccountKey.json`.
+9.  Create a web app in Firebase project settings and get the config keys.
+10.  Create a `web/.env.local` containing your Firebase config keys:
     ```env
     NEXT_PUBLIC_FIREBASE_API_KEY=...
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
@@ -41,20 +41,20 @@
     NEXT_PUBLIC_FIREBASE_APP_ID=...
     ALLOWED_EMAILS=... This is the comma separated list of emails allowed to access the webapp. This can be different than the list of emails allowed to access the agent.
     ```
-10. Now upload that `.env.local` content to netlify or whatever hosting provider you are using.
-11. Now we use that same `web/.env.local` file we just created for the agent's config (these are the required values for just the agent):
+11. Now upload that `.env.local` content to netlify or whatever hosting provider you are using.
+12. Now we use that same `web/.env.local` file we just created for the agent's config (these are the required values for just the agent):
     ```env
     NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
     ALLOWED_EMAILS=... The comma separated list of emails allowed to access this agent.
     DEVICE_ID=... This value is optional and sets the name for this agent that will be displayed in the device list.
     ```
-12. Navigate to `agent/`.
-13. Install dependencies: (You should already have a recent version of python installed.)
+13. Navigate to `agent/`.
+14. Install dependencies: (You should already have a recent version of python installed.)
     ```bash
     pip install -r requirements.txt
     ```
-14. ***WAIT!*** The script is **by default** set to **automatically reboot** the machine if uptime is >24 hours, **if you run the launcher without changing this setting it may cause your machine to immediately reboot**.
+15. ***WAIT!*** The script is **by default** set to **automatically reboot** the machine if uptime is >24 hours, **if you run the launcher without changing this setting it may cause your machine to immediately reboot**.
 *   You can adjust this interval in `wrapper/launcher.py`
 *   **For a long term deployment, configure `wrapper/launcher.py` to run after reboot, when internet access is available.**
         Search the web or ask AI for information on how to do this in your environment.
@@ -75,4 +75,4 @@
 *   Follow the `Initial Setup Instructions` starting at **step 9** and skipping **step 10**.
 
 ## Contributing
-    I would love any feature suggestions or feedback, however minimal or edge case. Make a github issue, or submit a pull request yourself to improve the app for all.
+I would love any feature suggestions or feedback, however minimal or edge case. Make a github issue, or submit a pull request yourself to improve the app for all.
