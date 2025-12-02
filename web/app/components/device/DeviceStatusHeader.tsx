@@ -22,8 +22,8 @@ export const DeviceStatusHeader = memo(function DeviceStatusHeader({ device, for
         }} />
       </div>
       
-      <div className="relative p-6 sm:p-8">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-6">
+      <div className="relative p-4 sm:p-6 md:p-8">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 sm:gap-6">
           <DeviceIdentity device={device} connected={connected} formatUptime={formatUptime} />
           <ModeBadge mode={device.mode} />
         </div>
@@ -40,22 +40,22 @@ interface DeviceIdentityProps {
 
 const DeviceIdentity = memo(function DeviceIdentity({ device, connected, formatUptime }: DeviceIdentityProps) {
   return (
-    <div className="flex items-start gap-4">
+    <div className="flex items-start gap-3 sm:gap-4 min-w-0">
       {/* Device Icon */}
-      <div className={`p-4 rounded-2xl ${connected ? 'bg-green-500/10 ring-1 ring-green-500/20' : 'bg-red-500/10 ring-1 ring-red-500/20'}`}>
-        <svg className={`w-8 h-8 ${connected ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl shrink-0 ${connected ? 'bg-green-500/10 ring-1 ring-green-500/20' : 'bg-red-500/10 ring-1 ring-red-500/20'}`}>
+        <svg className={`w-6 h-6 sm:w-8 sm:h-8 ${connected ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
         </svg>
       </div>
       
-      <div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-white tracking-tight truncate max-w-full">
             {device.hostname || device.id}
           </h2>
           <ConnectionStatusBadge device={device} connected={connected} />
         </div>
-        <div className="text-gray-500 text-sm mt-1.5 font-mono">{device.id}</div>
+        <div className="text-gray-500 text-xs sm:text-sm mt-1 sm:mt-1.5 font-mono truncate">{device.id}</div>
         
         {/* Quick Stats Row */}
         <QuickStats device={device} connected={connected} formatUptime={formatUptime} />
@@ -108,29 +108,29 @@ interface QuickStatsProps {
 
 const QuickStats = memo(function QuickStats({ device, connected, formatUptime }: QuickStatsProps) {
   return (
-    <div className="flex flex-wrap gap-4 mt-4">
-      <div className="flex items-center gap-2 text-sm">
-        <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div className="grid grid-cols-1 xs:grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-4 mt-4">
+      <div className="flex items-center gap-2 text-sm bg-gray-800/30 sm:bg-transparent rounded-lg px-3 py-2 sm:p-0">
+        <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <span className="text-gray-400">Last seen</span>
-        <span className={`font-medium ${connected ? 'text-green-400' : 'text-red-400'}`}>
+        <span className="text-gray-400 shrink-0">Last seen</span>
+        <span className={`font-medium truncate ${connected ? 'text-green-400' : 'text-red-400'}`}>
           {getRelativeTime(device.last_seen)}
         </span>
       </div>
-      <div className="flex items-center gap-2 text-sm">
-        <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="flex items-center gap-2 text-sm bg-gray-800/30 sm:bg-transparent rounded-lg px-3 py-2 sm:p-0">
+        <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
         </svg>
-        <span className="text-gray-400">IP</span>
-        <span className="text-gray-200 font-mono">{device.ip || 'N/A'}</span>
+        <span className="text-gray-400 shrink-0">IP</span>
+        <span className="text-gray-200 font-mono truncate">{device.ip || 'N/A'}</span>
       </div>
-      <div className="flex items-center gap-2 text-sm">
-        <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="flex items-center gap-2 text-sm bg-gray-800/30 sm:bg-transparent rounded-lg px-3 py-2 sm:p-0 col-span-1 xs:col-span-2 sm:col-auto">
+        <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
         </svg>
-        <span className="text-gray-400">Uptime</span>
-        <span className="text-gray-200 font-medium">{device.stats?.boot_time !== undefined ? formatUptime(device.stats.boot_time) : 'N/A'}</span>
+        <span className="text-gray-400 shrink-0">Uptime</span>
+        <span className="text-gray-200 font-medium truncate">{device.stats?.boot_time !== undefined ? formatUptime(device.stats.boot_time) : 'N/A'}</span>
       </div>
     </div>
   );

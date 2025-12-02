@@ -13,7 +13,7 @@ export const ResourceGauges = memo(function ResourceGauges({ device }: ResourceG
   const diskPercent = device.stats?.disk_percent ?? 0;
 
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
       <ResourceGauge
         label="CPU"
         value={cpuPercent}
@@ -79,25 +79,28 @@ const ResourceGauge = memo(function ResourceGauge({
   const barColor = value > thresholds.danger ? 'bg-red-500' : value > thresholds.warning ? 'bg-yellow-500' : colors.bar;
 
   return (
-    <div className="relative bg-gray-900/50 rounded-2xl border border-gray-800 p-5 overflow-hidden group hover:border-gray-700 transition-colors">
+    <div className="relative bg-gray-900/50 rounded-2xl border border-gray-800 p-4 sm:p-5 overflow-hidden group hover:border-gray-700 transition-colors">
       <div className={`absolute inset-0 bg-gradient-to-br ${colors.bg} to-transparent`}></div>
       <div className="relative">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
+        {/* Mobile: horizontal layout, Desktop: vertical layout */}
+        <div className="flex sm:block items-center gap-4">
+          <div className="flex items-center gap-2 sm:mb-3 shrink-0">
             <div className={`p-1.5 rounded-lg ${colors.iconBg}`}>
               {icon}
             </div>
             <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
           </div>
-        </div>
-        <div className="text-3xl font-bold text-white mb-2">
-          {showNA ? 'N/A' : `${value.toFixed(1)}%`}
-        </div>
-        <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
-          <div 
-            className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
-            style={{ width: `${Math.min(value, 100)}%` }}
-          />
+          <div className="flex-1 sm:flex-none flex sm:block items-center gap-3 sm:gap-0">
+            <div className="text-2xl sm:text-3xl font-bold text-white sm:mb-2 shrink-0">
+              {showNA ? 'N/A' : `${value.toFixed(1)}%`}
+            </div>
+            <div className="flex-1 sm:w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
+                style={{ width: `${Math.min(value, 100)}%` }}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>
