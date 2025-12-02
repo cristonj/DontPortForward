@@ -1,38 +1,42 @@
 "use client";
 
-import { useState, useCallback, KeyboardEvent, ChangeEvent, FormEvent } from "react";
-import { SUGGESTED_COMMANDS } from "../../constants/console";
+import { useState, useCallback, useMemo, KeyboardEvent, ChangeEvent, FormEvent } from "react";
+import { useCommandSuggestions } from "../../hooks";
 
 interface CommandInputProps {
   onSubmit: (command: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  userId?: string | null;
 }
 
 export default function CommandInput({ 
   onSubmit, 
   disabled = false,
-  placeholder = ""
+  placeholder = "",
+  userId = null
 }: CommandInputProps) {
   const [inputCommand, setInputCommand] = useState("");
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  const [isSuggestionsHidden, setIsSuggestionsHidden] = useState(false);
+
+  // Per-user Markov chain for intelligent suggestions
+  const { getSuggestionsForInput, recordCommand } = useCommandSuggestions({
+    userId,
+  });
+
+  // Derive suggestions from input (computed, not state)
+  const suggestions = useMemo(() => {
+    if (!inputCommand.trim()) return [];
+    return getSuggestionsForInput(inputCommand);
+  }, [inputCommand, getSuggestionsForInput]);
+
+  const showSuggestions = suggestions.length > 0 && !isSuggestionsHidden;
 
   const handleInputChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setInputCommand(value);
-    
-    if (value.trim()) {
-      const filtered = SUGGESTED_COMMANDS.filter(cmd => 
-        cmd.toLowerCase().startsWith(value.toLowerCase()) && cmd !== value
-      );
-      setSuggestions(filtered);
-      setShowSuggestions(filtered.length > 0);
-      setSuggestionIndex(-1);
-    } else {
-      setShowSuggestions(false);
-    }
+    setInputCommand(e.target.value);
+    setSuggestionIndex(-1);
+    setIsSuggestionsHidden(false);
   }, []);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
@@ -48,10 +52,10 @@ export default function CommandInput({
       if (suggestionIndex >= 0) {
         e.preventDefault();
         setInputCommand(suggestions[suggestionIndex]);
-        setShowSuggestions(false);
+        setIsSuggestionsHidden(true);
       }
     } else if (e.key === "Escape") {
-      setShowSuggestions(false);
+      setIsSuggestionsHidden(true);
     }
   }, [showSuggestions, suggestionIndex, suggestions]);
 
@@ -59,14 +63,17 @@ export default function CommandInput({
     e.preventDefault();
     if (!inputCommand.trim() || disabled) return;
     
-    onSubmit(inputCommand.trim());
+    const command = inputCommand.trim();
+    // Record command to Markov chain for future suggestions
+    recordCommand(command);
+    onSubmit(command);
     setInputCommand("");
-    setShowSuggestions(false);
-  }, [inputCommand, disabled, onSubmit]);
+    setIsSuggestionsHidden(true);
+  }, [inputCommand, disabled, onSubmit, recordCommand]);
 
   const selectSuggestion = useCallback((suggestion: string) => {
     setInputCommand(suggestion);
-    setShowSuggestions(false);
+    setIsSuggestionsHidden(true);
   }, []);
 
   return (
