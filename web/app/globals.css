@@ -2,6 +2,9 @@
 
 /* Extend Tailwind with terminal theme colors */
 @theme {
+  /* Custom breakpoint for extra small screens */
+  --breakpoint-xs: 475px;
+  
   --color-terminal-accent: #3b82f6;
   --color-terminal-accent-bright: #60a5fa;
   --color-terminal-glow: rgba(59, 130, 246, 0.4);

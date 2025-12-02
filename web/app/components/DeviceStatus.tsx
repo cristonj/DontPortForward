@@ -113,11 +113,11 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 pb-20 sm:pb-6">
+    <div className="h-full overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 scrollbar-thin scrollbar-thumb-gray-800 pb-20 sm:pb-6">
       <DeviceStatusHeader device={device} formatUptime={formatUptime} />
       <ResourceGauges device={device} />
       
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
         <SystemInfoCard device={device} />
         <ConfigurationCard
           device={device}
