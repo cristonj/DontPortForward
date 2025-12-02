@@ -396,6 +396,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
           onSubmit={sendCommand}
           disabled={!deviceId}
           placeholder={""}
+          userId={user?.uid || null}
         />
       </div>
     </div>
