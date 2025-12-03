@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { db } from "../../lib/firebase";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot, query, where, addDoc, serverTimestamp } from "firebase/firestore";
 import type { Device } from "../types";
 import { isDeviceConnected } from "../utils";
-import { WindowsIcon, LinuxIcon, AppleIcon, DefaultDeviceIcon } from "./Icons";
+import { WindowsIcon, LinuxIcon, AppleIcon, DefaultDeviceIcon, PowerIcon } from "./Icons";
 
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;
@@ -58,6 +58,27 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
     return <DefaultDeviceIcon />;
   }, []);
 
+  const handleReboot = useCallback(async (e: React.MouseEvent, deviceId: string, deviceName: string) => {
+    e.stopPropagation(); // Prevent device selection when clicking reboot
+    
+    if (!confirm(`Are you sure you want to reboot ${deviceName || deviceId}? This will restart the entire system.`)) {
+      return;
+    }
+    
+    try {
+      const commandsRef = collection(db, "devices", deviceId, "commands");
+      await addDoc(commandsRef, {
+        command: 'sudo reboot',
+        type: 'shell',
+        status: 'pending',
+        created_at: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Error sending reboot command:", error);
+      alert("Failed to send reboot command");
+    }
+  }, []);
+
   return (
     <div className={`w-full bg-gray-900 border-r border-gray-800 flex flex-col h-full overflow-hidden shrink-0 ${className}`}>
       <div className="p-4 border-b border-gray-800 shrink-0 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
@@ -65,11 +86,12 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-800 pb-20 md:pb-0">
         {devices.map(device => {
+            const connected = isDeviceConnected(device.last_seen);
             return (
-            <button
+            <div
               key={device.id}
               onClick={() => onSelectDevice(device.id)}
-              className={`w-full text-left p-4 border-b border-gray-800 hover:bg-gray-800/50 transition-all group ${
+              className={`w-full text-left p-4 border-b border-gray-800 hover:bg-gray-800/50 transition-all group cursor-pointer ${
                 selectedDeviceId === device.id ? "bg-gray-800 border-l-4 border-l-blue-500 shadow-inner" : "border-l-4 border-l-transparent"
               }`}
             >
@@ -86,9 +108,20 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
                         </div>
                         <div className="text-xs text-gray-500 truncate font-mono mt-0.5">{device.ip}</div>
                     </div>
-                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ring-4 ring-gray-900 ${
-                       isDeviceConnected(device.last_seen) ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-red-500'
-                    }`} title={isDeviceConnected(device.last_seen) ? 'Connected' : 'Not Connected'} />
+                    <div className="flex items-center gap-2 shrink-0">
+                      {connected && (
+                        <button
+                          onClick={(e) => handleReboot(e, device.id, device.hostname || device.id)}
+                          className="p-1.5 text-gray-500 hover:text-orange-400 hover:bg-orange-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                          title="Reboot Device"
+                        >
+                          <PowerIcon className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <span className={`w-2.5 h-2.5 rounded-full ring-4 ring-gray-900 ${
+                         connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-red-500'
+                      }`} title={connected ? 'Connected' : 'Not Connected'} />
+                    </div>
                 </div>
               </div>
               
@@ -104,7 +137,7 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
                       </div>
                   </div>
               )}
-            </button>
+            </div>
         )})}
         {devices.length === 0 && (
             <div className="p-8 text-gray-500 text-sm text-center flex flex-col items-center gap-2">

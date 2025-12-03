@@ -14,6 +14,15 @@ export interface DeviceStats {
   boot_time?: number;
 }
 
+export interface DeviceConfig {
+  polling_rate?: number;
+  sleep_polling_rate?: number;
+  idle_timeout?: number;
+  heartbeat_interval?: number;
+  max_output_chars?: number;
+  startup_file?: string | null;
+}
+
 export interface Device {
   id: string;
   hostname?: string;
@@ -28,6 +37,9 @@ export interface Device {
   mode?: string;
   polling_rate?: number;
   sleep_polling_rate?: number;
+  idle_timeout?: number;
+  heartbeat_interval?: number;
+  max_output_chars?: number;
   allowed_emails?: string[];
   startup_file?: string | null;
 }

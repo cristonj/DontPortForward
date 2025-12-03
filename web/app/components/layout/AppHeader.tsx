@@ -6,7 +6,7 @@ import { isDeviceConnected } from "../../utils";
 import { MenuIcon, RefreshIcon } from "../Icons";
 import { PulsingDot } from "../ui";
 
-type ViewMode = 'console' | 'status' | 'files';
+type ViewMode = 'console' | 'status' | 'files' | 'config';
 
 interface AppHeaderProps {
   selectedDeviceId: string;
@@ -102,6 +102,7 @@ const ViewModeSwitcher = memo(function ViewModeSwitcher({ currentMode, onModeCha
     { key: 'console', label: 'Term' },
     { key: 'files', label: 'Files' },
     { key: 'status', label: 'Info' },
+    { key: 'config', label: 'Config' },
   ];
 
   return (

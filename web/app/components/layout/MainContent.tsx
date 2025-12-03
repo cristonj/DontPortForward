@@ -14,7 +14,11 @@ const SharedFolder = dynamic(() => import('../SharedFolder'), {
   loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading files...</div>
 });
 
-type ViewMode = 'console' | 'status' | 'files';
+const ConfigView = dynamic(() => import('../config/ConfigView'), {
+  loading: () => <div className="h-full flex items-center justify-center text-gray-500">Loading config...</div>
+});
+
+type ViewMode = 'console' | 'status' | 'files' | 'config';
 
 interface MainContentProps {
   viewMode: ViewMode;
@@ -44,6 +48,10 @@ export const MainContent = memo(function MainContent({
 
   if (viewMode === 'status') {
     return <DeviceStatus deviceId={selectedDeviceId} />;
+  }
+
+  if (viewMode === 'config') {
+    return <ConfigView deviceId={selectedDeviceId} />;
   }
 
   return <ConsoleView deviceId={selectedDeviceId} user={user} />;
