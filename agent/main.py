@@ -53,9 +53,20 @@ if not STORAGE_BUCKET:
     print("Warning: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET not found in environment variables.")
 
 DEVICE_ID = os.getenv("DEVICE_ID", platform.node())
-IDLE_TIMEOUT = 60
 SHARED_FOLDER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shared')
 API_URL = "http://localhost:8000"
+
+# Default configuration values (can be overridden by Firestore config)
+DEFAULT_CONFIG = {
+    'polling_rate': 30,
+    'sleep_polling_rate': 60,
+    'idle_timeout': 60,
+    'heartbeat_interval': 60,
+    'max_output_chars': 50000,
+}
+
+# Global config that gets populated on boot
+agent_config = DEFAULT_CONFIG.copy()
 
 # Global registry to track active commands for API access
 # Format: {cmd_id: CommandExecutor instance}
@@ -180,10 +191,11 @@ class CommandExecutor(threading.Thread):
         self.error_buffer = []   # List of (timestamp, line) tuples for stderr
         self.last_heartbeat = time.time()
         self.kill_listener = None
-        self.heartbeat_interval = 60.0  # Only send heartbeat every 60s (just to show command is alive)
+        # Use config values (from Firestore or defaults)
+        self.heartbeat_interval = float(agent_config.get('heartbeat_interval', 60))
         self.command_start_time = time.time()
         self.max_memory_lines = 10000  # Keep last 10k lines in memory
-        self.max_output_chars = 50000  # Limit output size sent to Firestore (50KB)
+        self.max_output_chars = agent_config.get('max_output_chars', 50000)  # Limit output size sent to Firestore
 
     def _read_stream(self, stream, buffer):
         try:
@@ -481,22 +493,66 @@ class Agent:
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
         
-        self.polling_rate = 30  # Increased from 10s to 30s to reduce DB operations by 66%
-        self.sleep_polling_rate = 60
-        self.idle_timeout = IDLE_TIMEOUT
+        # Load config from Firestore document on boot
+        self.load_config_from_firestore()
+        
+        # Use config values (from Firestore or defaults)
+        self.polling_rate = agent_config.get('polling_rate', 30)
+        self.sleep_polling_rate = agent_config.get('sleep_polling_rate', 60)
+        self.idle_timeout = agent_config.get('idle_timeout', 60)
 
         self.doc_ref.on_snapshot(self.on_device_update)
+    
+    def load_config_from_firestore(self):
+        """Load configuration from Firestore device document on boot."""
+        global agent_config
+        print("Loading configuration from Firestore...")
+        try:
+            doc_snapshot = self.doc_ref.get()
+            if doc_snapshot.exists:
+                data = doc_snapshot.to_dict()
+                
+                # Update config with values from Firestore if they exist
+                config_keys = ['polling_rate', 'sleep_polling_rate', 'idle_timeout', 
+                             'heartbeat_interval', 'max_output_chars']
+                
+                for key in config_keys:
+                    if key in data and data[key] is not None:
+                        agent_config[key] = data[key]
+                        print(f"  Config loaded: {key} = {data[key]}")
+                
+                print(f"Configuration loaded successfully.")
+            else:
+                print("No existing device document found. Using default configuration.")
+        except Exception as e:
+            print(f"Error loading config from Firestore: {e}")
+            print("Using default configuration.")
 
     def on_device_update(self, doc_snapshot, changes, read_time):
         for change in changes:
              if change.type.name == 'MODIFIED':
                  data = change.document.to_dict()
                  if data:
+                     updated = []
                      if 'polling_rate' in data:
                          self.polling_rate = data['polling_rate']
+                         updated.append(f"polling_rate={data['polling_rate']}s")
                      if 'sleep_polling_rate' in data:
                          self.sleep_polling_rate = data['sleep_polling_rate']
-                     print(f"Config updated: Active={self.polling_rate}s, Sleep={self.sleep_polling_rate}s")
+                         updated.append(f"sleep_polling_rate={data['sleep_polling_rate']}s")
+                     if 'idle_timeout' in data:
+                         self.idle_timeout = data['idle_timeout']
+                         updated.append(f"idle_timeout={data['idle_timeout']}s")
+                     # Note: heartbeat_interval and max_output_chars only apply to new commands
+                     # They are read from agent_config when CommandExecutor is created
+                     if 'heartbeat_interval' in data:
+                         agent_config['heartbeat_interval'] = data['heartbeat_interval']
+                         updated.append(f"heartbeat_interval={data['heartbeat_interval']}s")
+                     if 'max_output_chars' in data:
+                         agent_config['max_output_chars'] = data['max_output_chars']
+                         updated.append(f"max_output_chars={data['max_output_chars']}")
+                     if updated:
+                         print(f"Config updated: {', '.join(updated)}")
 
     def fetch_agent_info(self):
         """Fetches data from the local API with retry logic."""
@@ -565,8 +621,11 @@ class Agent:
             'ip': info.get('ip', '127.0.0.1'),
             'stats': info.get('stats', {}),
             'git': info.get('git', {}),
-            'polling_rate': 30,  # Increased from 10s to 30s to reduce DB operations
-            'sleep_polling_rate': 60,
+            'polling_rate': agent_config.get('polling_rate', 30),
+            'sleep_polling_rate': agent_config.get('sleep_polling_rate', 60),
+            'idle_timeout': agent_config.get('idle_timeout', 60),
+            'heartbeat_interval': agent_config.get('heartbeat_interval', 60),
+            'max_output_chars': agent_config.get('max_output_chars', 50000),
             'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
         }
         

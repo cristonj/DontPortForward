@@ -5,7 +5,7 @@ import { useAuth, useDevice } from "./hooks";
 import { LoginScreen, LoadingScreen } from "./components/auth";
 import { AppSidebar, AppHeader, MainContent } from "./components/layout";
 
-type ViewMode = 'console' | 'status' | 'files';
+type ViewMode = 'console' | 'status' | 'files' | 'config';
 
 export default function Home() {
   const { user, authLoading, errorMsg, handleLogin, handleLogout } = useAuth();
