@@ -668,7 +668,7 @@ class Agent:
             update_data = {
                 'last_seen': firestore.SERVER_TIMESTAMP,
                 'stats': info.get('stats', {}),
-                'mode': 'active' if self.watch else 'sleep'
+                'mode': 'active'
             }
             if info.get('git'):
                 update_data['git'] = info.get('git')
@@ -688,38 +688,21 @@ class Agent:
             self.file_syncer.start()
 
     def listen_for_commands(self):
-        self.last_activity_time = time.time()
+        # Keep the real-time listener open permanently — commands fire instantly via push,
+        # no polling needed. Sleep mode is disabled; the persistent connection costs nothing
+        # extra in Firestore pricing (billed on reads, not connection time).
         self.start_watching()
         self.start_file_syncer()
-        
+
         while self.running:
-            current_time = time.time()
-            
             finished_ids = [cmd_id for cmd_id, thread in self.active_commands.items() if not thread.is_alive()]
             for cmd_id in finished_ids:
                 print(f"Command {cmd_id} finished.")
                 del self.active_commands[cmd_id]
 
-            is_busy = len(self.active_commands) > 0
+            self.send_heartbeat()
+            time.sleep(self.polling_rate)
 
-            idle_time = current_time - self.last_activity_time
-            
-            if self.watch: 
-                if idle_time > self.idle_timeout:
-                    print(f"No activity for {self.idle_timeout}s. Entering sleep mode...")
-                    self.stop_watching()
-                else:
-                    self.send_heartbeat()
-                    time.sleep(self.polling_rate)
-            else: 
-                if self.has_pending_commands():
-                    print("Activity detected via poll. Waking up...")
-                    self.last_activity_time = time.time()
-                    self.start_watching()
-                else:
-                    self.send_heartbeat()
-                    time.sleep(self.sleep_polling_rate)
-        
         self.file_syncer.stop()
         self.file_syncer.join()
 
