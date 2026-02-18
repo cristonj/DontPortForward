@@ -2,19 +2,22 @@
 
 import { useState, useCallback, useMemo, KeyboardEvent, ChangeEvent, FormEvent } from "react";
 import { useCommandSuggestions } from "../../hooks";
+import { COMMAND_MAX_LENGTH } from "../../constants";
 
 interface CommandInputProps {
   onSubmit: (command: string) => void;
   disabled?: boolean;
   placeholder?: string;
   userId?: string | null;
+  platform?: string;
 }
 
-export default function CommandInput({ 
-  onSubmit, 
+export default function CommandInput({
+  onSubmit,
   disabled = false,
   placeholder = "",
-  userId = null
+  userId = null,
+  platform
 }: CommandInputProps) {
   const [inputCommand, setInputCommand] = useState("");
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
@@ -23,6 +26,7 @@ export default function CommandInput({
   // Per-user Markov chain for intelligent suggestions
   const { getSuggestionsForInput, recordCommand } = useCommandSuggestions({
     userId,
+    platform,
   });
 
   // Derive suggestions from input (computed, not state)
@@ -120,6 +124,7 @@ export default function CommandInput({
             disabled={disabled}
             autoComplete="off"
             spellCheck={false}
+            maxLength={COMMAND_MAX_LENGTH}
           />
           
           {/* Blinking cursor indicator when focused and empty */}

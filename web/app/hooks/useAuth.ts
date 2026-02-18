@@ -53,6 +53,7 @@ export function useAuth(): UseAuthReturn {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error("Error signing in", error);
+      setErrorMsg("Login failed. Please check your connection and try again.");
     }
   }, []);
 

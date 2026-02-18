@@ -1,8 +1,9 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState, useEffect, useCallback } from "react";
 import type { Device } from "../../types";
 import { isDeviceConnected } from "../../utils";
+import { RELATIVE_TIME_UPDATE_INTERVAL_MS } from "../../constants";
 import { MenuIcon, RefreshIcon } from "../Icons";
 import { PulsingDot } from "../ui";
 
@@ -14,7 +15,7 @@ interface AppHeaderProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   onMenuClick: () => void;
-  onRestart: () => void;
+  onRestart: () => void | Promise<void>;
 }
 
 export const AppHeader = memo(function AppHeader({
@@ -65,8 +66,15 @@ interface DeviceInfoProps {
 }
 
 const DeviceInfo = memo(function DeviceInfo({ selectedDeviceId, selectedDevice }: DeviceInfoProps) {
+  // Periodic tick to re-evaluate connection status (time-dependent check)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), RELATIVE_TIME_UPDATE_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
   const connected = selectedDevice ? isDeviceConnected(selectedDevice.last_seen) : false;
-  
+
   return (
     <div className="flex flex-col min-w-0">
       <h1 className="font-bold text-sm sm:text-base leading-none tracking-tight truncate">
@@ -125,17 +133,34 @@ const ViewModeSwitcher = memo(function ViewModeSwitcher({ currentMode, onModeCha
 });
 
 interface RestartButtonProps {
-  onRestart: () => void;
+  onRestart: () => void | Promise<void>;
 }
 
 const RestartButton = memo(function RestartButton({ onRestart }: RestartButtonProps) {
+  const [restarting, setRestarting] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await onRestart();
+    } finally {
+      setTimeout(() => setRestarting(false), 3000);
+    }
+  }, [onRestart, restarting]);
+
   return (
     <button
-      onClick={onRestart}
-      className="p-2 text-gray-400 hover:text-terminal-error hover:bg-terminal-error/10 rounded-lg transition-colors"
+      onClick={handleClick}
+      disabled={restarting}
+      className={`p-2 rounded-lg transition-colors ${
+        restarting
+          ? 'text-gray-600 cursor-not-allowed'
+          : 'text-gray-400 hover:text-terminal-error hover:bg-terminal-error/10'
+      }`}
       title="Restart Agent"
     >
-      <RefreshIcon className="w-4 h-4" />
+      <RefreshIcon className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
     </button>
   );
 });

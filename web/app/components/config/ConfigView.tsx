@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { db } from "../../../lib/firebase";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, updateDoc } from "firebase/firestore";
 import type { Device } from "../../types";
 import { getDeviceDocumentPath } from "../../constants";
-import { LoadingState } from "../ui";
+import { LoadingState, useToast } from "../ui";
 import { InfoIcon, SaveIcon, WarningIcon } from "../Icons";
 
 interface ConfigViewProps {
   deviceId: string;
+  device: Device | null;
 }
 
 interface ConfigField {
@@ -84,44 +85,36 @@ const CONFIG_FIELDS: ConfigField[] = [
   }
 ];
 
-export default function ConfigView({ deviceId }: ConfigViewProps) {
-  const [device, setDevice] = useState<Device | null>(null);
-  const [loading, setLoading] = useState(true);
+function getConfigFromDevice(device: Device): Partial<Device> {
+  return {
+    polling_rate: device.polling_rate ?? 30,
+    sleep_polling_rate: device.sleep_polling_rate ?? 60,
+    idle_timeout: device.idle_timeout ?? 60,
+    heartbeat_interval: device.heartbeat_interval ?? 60,
+    max_output_chars: device.max_output_chars ?? 50000,
+    startup_file: device.startup_file ?? '',
+  };
+}
+
+export default function ConfigView({ deviceId, device }: ConfigViewProps) {
+  const { toast } = useToast();
   const [localConfig, setLocalConfig] = useState<Partial<Device>>({});
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [initialized, setInitialized] = useState(false);
 
+  // Initialize local config from device prop only once per device
   useEffect(() => {
-    if (!deviceId) {
-      setDevice(null);
-      return;
+    if (device && !initialized) {
+      setLocalConfig(getConfigFromDevice(device));
+      setInitialized(true);
+      setHasChanges(false);
     }
+  }, [device, initialized]);
 
-    const unsub = onSnapshot(doc(db, ...getDeviceDocumentPath(deviceId)), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data() as Omit<Device, 'id'>;
-        setDevice({ id: doc.id, ...data });
-        // Initialize local config from device data
-        setLocalConfig({
-          polling_rate: data.polling_rate ?? 30,
-          sleep_polling_rate: data.sleep_polling_rate ?? 60,
-          idle_timeout: data.idle_timeout ?? 60,
-          heartbeat_interval: data.heartbeat_interval ?? 60,
-          max_output_chars: data.max_output_chars ?? 50000,
-          startup_file: data.startup_file ?? '',
-        });
-        setHasChanges(false);
-      } else {
-        setDevice(null);
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching device config:", error);
-      setDevice(null);
-      setLoading(false);
-    });
-
-    return () => unsub();
+  // Reset initialized flag when device changes
+  useEffect(() => {
+    setInitialized(false);
   }, [deviceId]);
 
   const handleChange = useCallback((key: keyof Device, value: string | number) => {
@@ -134,11 +127,11 @@ export default function ConfigView({ deviceId }: ConfigViewProps) {
 
   const handleSave = useCallback(async () => {
     if (!device) return;
-    
+
     setSaving(true);
     try {
       const updates: Partial<Device> = {};
-      
+
       for (const field of CONFIG_FIELDS) {
         const value = localConfig[field.key];
         if (value !== undefined && value !== device[field.key]) {
@@ -149,15 +142,15 @@ export default function ConfigView({ deviceId }: ConfigViewProps) {
           }
         }
       }
-      
+
       if (Object.keys(updates).length > 0) {
         await updateDoc(doc(db, ...getDeviceDocumentPath(deviceId)), updates);
       }
-      
+
       setHasChanges(false);
     } catch (error) {
       console.error("Error saving config:", error);
-      alert("Failed to save configuration. Please try again.");
+      toast("Failed to save configuration. Please try again.", "error");
     } finally {
       setSaving(false);
     }
@@ -165,14 +158,7 @@ export default function ConfigView({ deviceId }: ConfigViewProps) {
 
   const handleReset = useCallback(() => {
     if (!device) return;
-    setLocalConfig({
-      polling_rate: device.polling_rate ?? 30,
-      sleep_polling_rate: device.sleep_polling_rate ?? 60,
-      idle_timeout: device.idle_timeout ?? 60,
-      heartbeat_interval: device.heartbeat_interval ?? 60,
-      max_output_chars: device.max_output_chars ?? 50000,
-      startup_file: device.startup_file ?? '',
-    });
+    setLocalConfig(getConfigFromDevice(device));
     setHasChanges(false);
   }, [device]);
 
@@ -184,16 +170,8 @@ export default function ConfigView({ deviceId }: ConfigViewProps) {
     );
   }
 
-  if (loading) {
-    return <LoadingState message="Loading configuration..." />;
-  }
-
   if (!device) {
-    return (
-      <div className="h-full flex items-center justify-center text-red-500">
-        Device not found.
-      </div>
-    );
+    return <LoadingState message="Loading configuration..." />;
   }
 
   return (
@@ -279,7 +257,7 @@ interface ConfigFieldCardProps {
 
 function ConfigFieldCard({ field, value, originalValue, onChange }: ConfigFieldCardProps) {
   const hasChanged = value !== originalValue && value !== undefined;
-  
+
   return (
     <div className={`bg-gray-900/50 border rounded-xl p-4 transition-all ${
       hasChanged ? 'border-emerald-500/50 shadow-lg shadow-emerald-500/5' : 'border-gray-800 hover:border-gray-700'

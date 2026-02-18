@@ -66,6 +66,7 @@ export default function Home() {
         <MainContent
           viewMode={viewMode}
           selectedDeviceId={selectedDeviceId}
+          selectedDevice={selectedDevice}
           user={user}
           onSendCommand={handleSendCommand}
         />

@@ -10,7 +10,8 @@ import {
   getDownloadURL, 
   deleteObject
 } from "firebase/storage";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc } from "firebase/firestore";
+import type { Device } from "../types";
 import type { FileItem } from "../types";
 import { 
   MAX_FILE_SIZE_FOR_EDIT, 
@@ -19,16 +20,19 @@ import {
   getSharedFilePath
 } from "../constants";
 import { withRetry, getErrorMessage } from "../utils";
+import { useToast } from "./ui";
 import { FileCreateModal, FileListTable, FileToolbar } from "./files";
 
 const storage = getStorage(app);
 
 interface SharedFolderProps {
   deviceId: string;
+  selectedDevice?: Device | null;
   onRunCommand?: (command: string) => void;
 }
 
-export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderProps) {
+export default function SharedFolder({ deviceId, selectedDevice, onRunCommand }: SharedFolderProps) {
+  const { toast } = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -57,26 +61,18 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
     }
   }, [deviceId]);
 
-  const fetchStartupFile = useCallback(async () => {
-    if (!deviceId) return;
-    try {
-      const deviceRef = doc(db, 'devices', deviceId);
-      const deviceSnap = await getDoc(deviceRef);
-      if (deviceSnap.exists()) {
-        const data = deviceSnap.data();
-        setStartupFile(data.startup_file || null);
-      }
-    } catch (error) {
-      console.error("Error fetching startup file:", error);
+  // Derive startupFile from the parent's device data (no extra Firestore read)
+  useEffect(() => {
+    if (selectedDevice) {
+      setStartupFile(selectedDevice.startup_file || null);
     }
-  }, [deviceId]);
+  }, [selectedDevice?.startup_file]);
 
   useEffect(() => {
     if (deviceId) {
       fetchFiles();
-      fetchStartupFile();
     }
-  }, [deviceId, fetchFiles, fetchStartupFile]);
+  }, [deviceId, fetchFiles]);
 
   const handleUpload = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -89,7 +85,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       await fetchFiles();
     } catch (error) {
       console.error("Error uploading file:", error);
-      alert(`Failed to upload file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to upload file: ${getErrorMessage(error, 'Network error')}`, "error");
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -99,7 +95,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
   const handleCreateFile = useCallback(async (e: FormEvent) => {
     e.preventDefault();
     if (!newFileName.trim()) {
-      alert("Please enter a filename");
+      toast("Please enter a filename", "error");
       return;
     }
 
@@ -114,7 +110,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setNewFileContent("");
     } catch (error) {
       console.error("Error creating file:", error);
-      alert(`Failed to create file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to create file: ${getErrorMessage(error, 'Network error')}`, "error");
     } finally {
       setUploading(false);
     }
@@ -129,7 +125,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       
       const text = await response.text();
       if (text.length > MAX_FILE_SIZE_FOR_EDIT) {
-        alert("File is too large to edit in the browser.");
+        toast("File is too large to edit in the browser.", "error");
         return;
       }
 
@@ -138,7 +134,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       setIsCreatingFile(true);
     } catch (error) {
       console.error("Error loading file:", error);
-      alert(`Failed to load file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to load file: ${getErrorMessage(error, 'Network error')}`, "error");
     }
   }, []);
 
@@ -148,7 +144,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       window.open(url, '_blank');
     } catch (error) {
       console.error("Error downloading file:", error);
-      alert(`Failed to download file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to download file: ${getErrorMessage(error, 'Network error')}`, "error");
     }
   }, []);
 
@@ -159,7 +155,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       await fetchFiles();
     } catch (error) {
       console.error("Error deleting file:", error);
-      alert(`Failed to delete file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to delete file: ${getErrorMessage(error, 'Network error')}`, "error");
     }
   }, [fetchFiles]);
 
@@ -186,7 +182,7 @@ export default function SharedFolder({ deviceId, onRunCommand }: SharedFolderPro
       }
     } catch (error) {
       console.error("Error setting startup file:", error);
-      alert(`Failed to set startup file: ${getErrorMessage(error, 'Network error')}`);
+      toast(`Failed to set startup file: ${getErrorMessage(error, 'Network error')}`, "error");
     }
   }, [deviceId, startupFile]);
 

@@ -5,7 +5,9 @@ import { db } from "../../lib/firebase";
 import { collection, onSnapshot, query, where, addDoc, serverTimestamp } from "firebase/firestore";
 import type { Device } from "../types";
 import { isDeviceConnected } from "../utils";
+import { COMMAND_TYPE_RESTART, COMMAND_STATUS_PENDING } from "../constants";
 import { WindowsIcon, LinuxIcon, AppleIcon, DefaultDeviceIcon, PowerIcon } from "./Icons";
+import { useToast } from "./ui";
 
 interface DeviceListProps {
   onSelectDevice: (deviceId: string) => void;
@@ -15,6 +17,7 @@ interface DeviceListProps {
 }
 
 export default function DeviceList({ onSelectDevice, selectedDeviceId, className = "", currentUserEmail }: DeviceListProps) {
+  const { toast } = useToast();
   // Start with empty devices if no user email
   const [devices, setDevices] = useState<Device[]>([]);
 
@@ -68,14 +71,14 @@ export default function DeviceList({ onSelectDevice, selectedDeviceId, className
     try {
       const commandsRef = collection(db, "devices", deviceId, "commands");
       await addDoc(commandsRef, {
-        command: 'sudo reboot',
-        type: 'shell',
-        status: 'pending',
+        command: 'Reboot Device',
+        type: COMMAND_TYPE_RESTART,
+        status: COMMAND_STATUS_PENDING,
         created_at: serverTimestamp()
       });
     } catch (error) {
       console.error("Error sending reboot command:", error);
-      alert("Failed to send reboot command");
+      toast("Failed to send reboot command", "error");
     }
   }, []);
 

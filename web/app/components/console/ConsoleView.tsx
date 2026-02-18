@@ -23,7 +23,7 @@ import HistoryCommandItem from "./HistoryCommandItem";
 import CommandInput from "./CommandInput";
 import { CommandLog } from "../../types/command";
 import { ErrorIcon, CloseIcon, TerminalIcon, TrashIcon } from "../Icons";
-import { PulsingDot } from "../ui";
+import { PulsingDot, useToast } from "../ui";
 import {
   COMMAND_TYPE_SHELL,
   COMMAND_STATUS_PENDING,
@@ -32,7 +32,8 @@ import {
   getCommandDocumentPath,
   CONSOLE_OUTPUT_REQUEST_TIMEOUT_SECONDS,
   CONSOLE_HISTORY_LIMIT,
-  CONSOLE_REFRESH_DELAY_MS
+  CONSOLE_REFRESH_DELAY_MS,
+  CONSOLE_ACTIVE_REFRESH_INTERVAL_MS
 } from "../../constants";
 import { getLastLines } from "../../utils";
 
@@ -42,9 +43,11 @@ const OPTIMISTIC_ID_PREFIX = "__optimistic__";
 interface ConsoleViewProps {
   deviceId: string;
   user: User;
+  platform?: string;
 }
 
-export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
+export default function ConsoleView({ deviceId, user, platform }: ConsoleViewProps) {
+  const { toast } = useToast();
   const [serverLogs, setServerLogs] = useState<CommandLog[]>([]);
   const [optimisticCommands, setOptimisticCommands] = useState<CommandLog[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -240,10 +243,21 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     [logs]
   );
   
-  const historyLogs = useMemo(() => 
-    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status)), 
+  const historyLogs = useMemo(() =>
+    logs.filter(log => !ACTIVE_COMMAND_STATUSES.includes(log.status)),
     [logs]
   );
+
+  // Auto-refresh while commands are active
+  useEffect(() => {
+    if (runningLogs.length === 0) return;
+
+    const interval = setInterval(() => {
+      fetchLogs(false);
+    }, CONSOLE_ACTIVE_REFRESH_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [runningLogs.length, fetchLogs]);
 
   const handleClearHistory = useCallback(async () => {
     if (!deviceId || historyLogs.length === 0) return;
@@ -259,7 +273,7 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
     } catch (error: unknown) {
       const err = error as { message?: string };
       console.error("Error clearing history:", error);
-      alert(`Failed to clear history: ${err?.message || 'Network error'}`);
+      toast(`Failed to clear history: ${err?.message || 'Network error'}`, "error");
     }
   }, [deviceId, historyLogs]);
 
@@ -392,11 +406,12 @@ export default function ConsoleView({ deviceId, user }: ConsoleViewProps) {
 
       {/* Command Input Area */}
       <div className="console-input-container bg-gray-900/80 backdrop-blur-sm p-3 border-t border-gray-800/60 shrink-0 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        <CommandInput 
+        <CommandInput
           onSubmit={sendCommand}
           disabled={!deviceId}
           placeholder={""}
           userId={user?.uid || null}
+          platform={platform}
         />
       </div>
     </div>

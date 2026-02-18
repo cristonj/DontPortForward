@@ -2,6 +2,7 @@ import os
 import time
 import subprocess
 import sys
+import signal
 import datetime
 from pathlib import Path
 
@@ -102,11 +103,23 @@ def run_agent(root_dir):
 def main():
     root_dir = get_project_root()
     print(f"Project root: {root_dir}")
-    
+
+    # Graceful shutdown via SIGTERM (e.g. from systemd/service managers)
+    should_stop = False
+    def handle_sigterm(signum, frame):
+        nonlocal should_stop
+        print("Received SIGTERM, shutting down...")
+        should_stop = True
+
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, handle_sigterm)
+
     agent_process = run_agent(root_dir)
+    agent_start_time = time.time()
     last_update_check = time.time()
-    
-    while True:
+    consecutive_failures = 0
+
+    while not should_stop:
         try:
             # Calculate time to next update check
             time_since_check = time.time() - last_update_check
@@ -114,13 +127,24 @@ def main():
 
             if agent_process:
                 try:
-                    # efficient blocking wait: returns immediately if agent exits, 
+                    # efficient blocking wait: returns immediately if agent exits,
                     # otherwise waits up to wait_time
                     agent_process.wait(timeout=wait_time)
-                    
+
                     # If we get here, the agent has exited
                     print(f"Agent exited (code {agent_process.returncode}). Restarting...")
+
+                    # Backoff on rapid failures (agent crashed within 10s of start)
+                    if time.time() - agent_start_time < 10:
+                        consecutive_failures += 1
+                        backoff = min(300, 5 * (2 ** consecutive_failures))
+                        print(f"Agent crashed quickly. Waiting {backoff}s before restart...")
+                        time.sleep(backoff)
+                    else:
+                        consecutive_failures = 0
+
                     agent_process = run_agent(root_dir)
+                    agent_start_time = time.time()
                 except subprocess.TimeoutExpired:
                     # Timeout reached, meaning agent is still running.
                     pass
@@ -128,11 +152,12 @@ def main():
                 # No agent process (failed to start?), sleep briefly and retry
                 time.sleep(5)
                 agent_process = run_agent(root_dir)
-            
+                agent_start_time = time.time()
+
             # Check for updates
             if time.time() - last_update_check > CHECK_INTERVAL:
                 last_update_check = time.time()
-                
+
                 if git_pull(root_dir):
                     print("Code updated. Restarting agent...")
                     if agent_process and agent_process.poll() is None:
@@ -141,7 +166,7 @@ def main():
                             agent_process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             agent_process.kill()
-                    
+
                     # Restart launcher to load new launcher code if changed
                     restart_program()
 
@@ -161,6 +186,15 @@ def main():
         except Exception as e:
             print(f"Launcher error: {e}")
             time.sleep(60)
+
+    # Clean shutdown (reached via SIGTERM)
+    if agent_process and agent_process.poll() is None:
+        print("Terminating agent process...")
+        agent_process.terminate()
+        try:
+            agent_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            agent_process.kill()
 
 if __name__ == "__main__":
     main()

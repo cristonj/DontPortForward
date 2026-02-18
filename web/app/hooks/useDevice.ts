@@ -2,14 +2,16 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { db } from "../../lib/firebase";
-import { 
-  collection, 
-  addDoc, 
+import {
+  collection,
+  addDoc,
   serverTimestamp,
   doc,
   onSnapshot,
 } from "firebase/firestore";
 import type { Device } from "../types";
+import { COMMAND_TYPE_SHELL, COMMAND_TYPE_RESTART, COMMAND_STATUS_PENDING } from "../constants";
+import { useToast } from "../components/ui";
 
 interface UseDeviceReturn {
   selectedDeviceId: string;
@@ -20,6 +22,7 @@ interface UseDeviceReturn {
 }
 
 export function useDevice(): UseDeviceReturn {
+  const { toast } = useToast();
   const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem("selectedDeviceId") || "";
@@ -48,15 +51,6 @@ export function useDevice(): UseDeviceReturn {
     return () => unsub();
   }, [selectedDeviceId]);
 
-  // Periodically refresh connection status
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Force re-render for connection status check
-      setSelectedDevice(prev => prev ? { ...prev } : null);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
   const handleDeviceSelect = useCallback((id: string) => {
     setSelectedDeviceId(id);
     localStorage.setItem("selectedDeviceId", id);
@@ -69,8 +63,8 @@ export function useDevice(): UseDeviceReturn {
       const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
       await addDoc(commandsRef, {
         command,
-        type: 'shell',
-        status: 'pending',
+        type: COMMAND_TYPE_SHELL,
+        status: COMMAND_STATUS_PENDING,
         created_at: serverTimestamp()
       });
     } catch (error) {
@@ -85,14 +79,14 @@ export function useDevice(): UseDeviceReturn {
     try {
       const commandsRef = collection(db, "devices", selectedDeviceId, "commands");
       await addDoc(commandsRef, {
-        type: 'restart',
-        command: 'Restart Agent', 
-        status: 'pending',
+        type: COMMAND_TYPE_RESTART,
+        command: 'Restart Agent',
+        status: COMMAND_STATUS_PENDING,
         created_at: serverTimestamp()
       });
     } catch (error) {
       console.error("Error sending restart command:", error);
-      alert("Failed to send restart command");
+      toast("Failed to send restart command", "error");
     }
   }, [selectedDeviceId]);
 

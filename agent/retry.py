@@ -2,6 +2,7 @@
 Retry utilities with exponential backoff for network operations.
 """
 import time
+import random
 from functools import wraps
 from typing import Callable, TypeVar, Tuple, Type, Optional
 from google.api_core import exceptions as google_exceptions
@@ -50,8 +51,8 @@ def retry_on_network_error(
                     return func(*args, **kwargs)
                 except exceptions as e:
                     if attempt < max_retries - 1:
-                        wait_time = retry_delay * (2 ** attempt)
-                        print(f"{prefix}Network error in {op_name} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                        wait_time = retry_delay * (2 ** attempt) * (0.5 + random.random())
+                        print(f"{prefix}Network error in {op_name} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time:.1f}s...")
                         time.sleep(wait_time)
                     else:
                         print(f"{prefix}Failed {op_name} after {max_retries} attempts: {e}")
@@ -59,7 +60,7 @@ def retry_on_network_error(
                 except Exception as e:
                     print(f"{prefix}Error in {op_name}: {e}")
                     raise
-            
+
             # Should not reach here, but just in case
             raise RuntimeError(f"Retry loop exited unexpectedly for {op_name}")
         return wrapper
@@ -99,8 +100,8 @@ def with_retry(
             return func()
         except exceptions as e:
             if attempt < max_retries - 1:
-                wait_time = retry_delay * (2 ** attempt)
-                print(f"{prefix}Network error in {op_name} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                wait_time = retry_delay * (2 ** attempt) * (0.5 + random.random())
+                print(f"{prefix}Network error in {op_name} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
             else:
                 print(f"{prefix}Failed {op_name} after {max_retries} attempts: {e}")

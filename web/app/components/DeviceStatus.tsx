@@ -2,16 +2,16 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { db } from "../../lib/firebase";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, updateDoc } from "firebase/firestore";
 import type { Device } from "../types";
-import { 
+import {
   RELATIVE_TIME_UPDATE_INTERVAL_MS,
   DEVICE_STATUS_MAX_RETRIES,
   RETRY_BASE_DELAY_MS,
   getDeviceDocumentPath
 } from "../constants";
 import { formatUptime, isNetworkError } from "../utils";
-import { LoadingState } from "./ui";
+import { LoadingState, useToast } from "./ui";
 import {
   DeviceStatusHeader,
   ResourceGauges,
@@ -22,42 +22,20 @@ import {
 
 interface DeviceStatusProps {
   deviceId: string;
+  device: Device | null;
 }
 
-export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
-  const [device, setDevice] = useState<Device | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function DeviceStatus({ deviceId, device }: DeviceStatusProps) {
+  const { toast } = useToast();
   const [localPollingRate, setLocalPollingRate] = useState<number | null>(null);
   const [, setTick] = useState(0); // Force re-render for relative time
 
+  // Initialize localPollingRate from device prop on first load
   useEffect(() => {
-    if (!deviceId) {
-      setDevice(null);
-      return;
+    if (device && localPollingRate === null && device.polling_rate) {
+      setLocalPollingRate(device.polling_rate);
     }
-
-    const unsub = onSnapshot(doc(db, ...getDeviceDocumentPath(deviceId)), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data() as Omit<Device, 'id'>;
-        setDevice({ id: doc.id, ...data });
-        // Only update local state if not interacting or on first load
-        if (localPollingRate === null && data.polling_rate) {
-          setLocalPollingRate(data.polling_rate);
-        }
-      } else {
-        setDevice(null);
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching device status:", error);
-      setDevice(null);
-      setLoading(false);
-    });
-
-    return () => unsub();
-    // localPollingRate intentionally excluded - only set on first load
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceId]);
+  }, [device, localPollingRate]);
 
   // Update relative time at configured interval
   useEffect(() => {
@@ -85,7 +63,7 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
         } else {
           console.error("Error updating polling rate:", error);
           const err = error as { message?: string };
-          alert(`Failed to update polling rate${attempt === DEVICE_STATUS_MAX_RETRIES - 1 ? ` after ${DEVICE_STATUS_MAX_RETRIES} attempts` : ''}: ${err?.message || 'Network error'}`);
+          toast(`Failed to update polling rate${attempt === DEVICE_STATUS_MAX_RETRIES - 1 ? ` after ${DEVICE_STATUS_MAX_RETRIES} attempts` : ''}: ${err?.message || 'Network error'}`, "error");
           return;
         }
       }
@@ -100,23 +78,15 @@ export default function DeviceStatus({ deviceId }: DeviceStatusProps) {
     );
   }
 
-  if (loading) {
-    return <LoadingState message="Loading device status..." />;
-  }
-
   if (!device) {
-    return (
-      <div className="h-full flex items-center justify-center text-red-500">
-        Device not found.
-      </div>
-    );
+    return <LoadingState message="Loading device status..." />;
   }
 
   return (
     <div className="h-full overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 scrollbar-thin scrollbar-thumb-gray-800 pb-20 sm:pb-6">
       <DeviceStatusHeader device={device} formatUptime={formatUptime} />
       <ResourceGauges device={device} />
-      
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
         <SystemInfoCard device={device} />
         <ConfigurationCard

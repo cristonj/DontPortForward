@@ -10,10 +10,11 @@ import {
   saveChainToStorage,
   getCommandCount,
 } from "../utils/markov";
-import { SUGGESTED_COMMANDS } from "../constants/console";
+import { SUGGESTED_COMMANDS_LINUX, SUGGESTED_COMMANDS_WINDOWS } from "../constants/console";
 
 interface UseCommandSuggestionsOptions {
   userId: string | null;
+  platform?: string;
   fallbackCommands?: readonly string[];
   maxSuggestions?: number;
 }
@@ -93,9 +94,16 @@ function createInitialState(userId: string | null): ChainState {
  */
 export function useCommandSuggestions({
   userId,
-  fallbackCommands = SUGGESTED_COMMANDS,
+  platform,
+  fallbackCommands,
   maxSuggestions = 8,
 }: UseCommandSuggestionsOptions): UseCommandSuggestionsReturn {
+  // Select platform-appropriate fallback commands
+  const effectiveFallback = fallbackCommands ?? (
+    platform && platform.toLowerCase().includes('win')
+      ? SUGGESTED_COMMANDS_WINDOWS
+      : SUGGESTED_COMMANDS_LINUX
+  );
   const [state, dispatch] = useReducer(
     chainReducer,
     userId,
@@ -147,7 +155,7 @@ export function useCommandSuggestions({
     // supplement with fallback commands
     if (results.length < maxSuggestions) {
       const remaining = maxSuggestions - results.length;
-      const fallbackMatches = fallbackCommands
+      const fallbackMatches = effectiveFallback
         .filter(cmd => 
           cmd.toLowerCase().startsWith(trimmedInput.toLowerCase()) && 
           cmd !== trimmedInput &&
@@ -162,7 +170,7 @@ export function useCommandSuggestions({
     }
 
     return results.slice(0, maxSuggestions);
-  }, [userId, fallbackCommands, maxSuggestions]);
+  }, [userId, effectiveFallback, maxSuggestions]);
 
   return {
     getSuggestionsForInput,
