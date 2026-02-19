@@ -11,6 +11,8 @@ export interface DeviceStats {
   cpu_percent: number;
   memory_percent: number;
   disk_percent?: number;
+  disk_free?: number;
+  disk_total?: number;
   boot_time?: number;
 }
 

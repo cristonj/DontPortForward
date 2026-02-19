@@ -92,10 +92,13 @@ def get_git_info():
 @app.get("/status")
 def get_status():
     try:
+        disk = psutil.disk_usage('/')
         stats = {
             'cpu_percent': psutil.cpu_percent(interval=None),
             'memory_percent': psutil.virtual_memory().percent,
-            'disk_percent': psutil.disk_usage('/').percent,
+            'disk_percent': disk.percent,
+            'disk_free': disk.free,
+            'disk_total': disk.total,
             'boot_time': psutil.boot_time()
         }
     except Exception:

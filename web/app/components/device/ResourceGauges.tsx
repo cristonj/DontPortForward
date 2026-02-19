@@ -11,6 +11,9 @@ export const ResourceGauges = memo(function ResourceGauges({ device }: ResourceG
   const cpuPercent = device.stats?.cpu_percent ?? 0;
   const memoryPercent = device.stats?.memory_percent ?? 0;
   const diskPercent = device.stats?.disk_percent ?? 0;
+  const diskFreeGb = device.stats?.disk_free != null
+    ? (device.stats.disk_free / 1073741824).toFixed(1)
+    : null;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
@@ -35,6 +38,7 @@ export const ResourceGauges = memo(function ResourceGauges({ device }: ResourceG
         colorClass="amber"
         thresholds={{ warning: 70, danger: 90 }}
         showNA={device.stats?.disk_percent === undefined}
+        subLabel={diskFreeGb != null ? `${diskFreeGb} GB free` : undefined}
       />
     </div>
   );
@@ -47,15 +51,17 @@ interface ResourceGaugeProps {
   colorClass: 'blue' | 'purple' | 'amber';
   thresholds: { warning: number; danger: number };
   showNA?: boolean;
+  subLabel?: string;
 }
 
-const ResourceGauge = memo(function ResourceGauge({ 
-  label, 
-  value, 
-  icon, 
-  colorClass, 
+const ResourceGauge = memo(function ResourceGauge({
+  label,
+  value,
+  icon,
+  colorClass,
   thresholds,
-  showNA = false 
+  showNA = false,
+  subLabel,
 }: ResourceGaugeProps) {
   const colorMap = {
     blue: {
@@ -91,12 +97,17 @@ const ResourceGauge = memo(function ResourceGauge({
             <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
           </div>
           <div className="flex-1 sm:flex-none flex sm:block items-center gap-3 sm:gap-0">
-            <div className="text-2xl sm:text-3xl font-bold text-white sm:mb-2 shrink-0">
-              {showNA ? 'N/A' : `${value.toFixed(1)}%`}
+            <div className="flex sm:block items-baseline gap-2 sm:mb-2 shrink-0">
+              <div className="text-2xl sm:text-3xl font-bold text-white">
+                {showNA ? 'N/A' : `${value.toFixed(1)}%`}
+              </div>
+              {subLabel && (
+                <div className="text-xs text-gray-500 sm:mt-0.5">{subLabel}</div>
+              )}
             </div>
             <div className="flex-1 sm:w-full bg-gray-800 rounded-full h-2 overflow-hidden">
-              <div 
-                className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${barColor}`}
                 style={{ width: `${Math.min(value, 100)}%` }}
               />
             </div>
