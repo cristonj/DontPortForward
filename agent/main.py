@@ -492,10 +492,12 @@ class Agent:
         self.active_commands = {} # cmd_id -> CommandExecutor
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
-        
+        self.last_listener_event = time.time()  # Track when listener last fired
+        self.listener_restart_count = 0  # Track how many times we've restarted the listener
+
         # Load config from Firestore document on boot
         self.load_config_from_firestore()
-        
+
         # Use config values (from Firestore or defaults)
         self.polling_rate = agent_config.get('polling_rate', 30)
         self.sleep_polling_rate = agent_config.get('sleep_polling_rate', 60)
@@ -646,12 +648,63 @@ class Agent:
              print("Starting real-time listener...")
              commands_ref = self.doc_ref.collection('commands').where(field_path='status', op_string='==', value='pending')
              self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
+             self.last_listener_event = time.time()
 
     def stop_watching(self):
         if self.watch:
             print("Stopping real-time listener...")
-            self.watch.unsubscribe()
+            try:
+                self.watch.unsubscribe()
+            except Exception as e:
+                print(f"Error unsubscribing listener: {e}")
             self.watch = None
+
+    def restart_listener(self):
+        """Tear down and re-establish the real-time command listener."""
+        self.listener_restart_count += 1
+        print(f"Restarting real-time listener (restart #{self.listener_restart_count})...")
+        self.stop_watching()
+        time.sleep(1)  # Brief pause before reconnecting
+        self.start_watching()
+
+    def check_listener_health(self):
+        """
+        Check if the real-time listener is still alive.
+        If it hasn't fired in a long time, restart it.
+        Also poll for any pending commands as a fallback.
+        """
+        # Listener health check: if no event in 5 minutes, restart
+        listener_stale_threshold = 5 * 60  # 5 minutes
+        time_since_last_event = time.time() - self.last_listener_event
+
+        if time_since_last_event > listener_stale_threshold:
+            print(f"Listener has not fired in {int(time_since_last_event)}s — restarting...")
+            self.restart_listener()
+            return
+
+        # Fallback poll: directly query for pending commands
+        # This catches anything the listener may have missed
+        self.poll_pending_commands()
+
+    def poll_pending_commands(self):
+        """
+        Fallback polling: directly query Firestore for pending commands.
+        Picks up commands the real-time listener may have silently missed.
+        """
+        try:
+            pending_docs = (
+                self.doc_ref.collection('commands')
+                .where(field_path='status', op_string='==', value='pending')
+                .get()
+            )
+            for doc in pending_docs:
+                cmd_id = doc.id
+                if cmd_id not in self.active_commands:
+                    cmd_data = doc.to_dict()
+                    print(f"[poll fallback] Found missed pending command: {cmd_id}")
+                    self.start_command(cmd_id, cmd_data)
+        except Exception as e:
+            print(f"Error in fallback poll: {e}")
 
     def has_pending_commands(self):
         try:
@@ -688,9 +741,9 @@ class Agent:
             self.file_syncer.start()
 
     def listen_for_commands(self):
-        # Keep the real-time listener open permanently — commands fire instantly via push,
-        # no polling needed. Sleep mode is disabled; the persistent connection costs nothing
-        # extra in Firestore pricing (billed on reads, not connection time).
+        # Keep the real-time listener open permanently — commands fire instantly via push.
+        # Additionally, periodically verify listener health and poll as a fallback,
+        # since gRPC-based listeners can silently disconnect after extended periods.
         self.start_watching()
         self.start_file_syncer()
 
@@ -701,12 +754,15 @@ class Agent:
                 del self.active_commands[cmd_id]
 
             self.send_heartbeat()
+            self.check_listener_health()
             time.sleep(self.polling_rate)
 
         self.file_syncer.stop()
         self.file_syncer.join()
 
     def on_command_snapshot(self, col_snapshot, changes, read_time):
+        # Mark that the listener is alive every time it fires (even with no changes)
+        self.last_listener_event = time.time()
         for change in changes:
             if change.type.name == 'ADDED':
                 self.last_activity_time = time.time()
