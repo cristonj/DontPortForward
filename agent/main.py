@@ -18,10 +18,20 @@ from requests.exceptions import RequestException, ConnectionError, Timeout
 from google.api_core import exceptions as google_exceptions
 try:
     from api import app as api_app
-    from retry import with_retry, NETWORK_EXCEPTIONS
+    from retry import (
+        with_retry,
+        NETWORK_EXCEPTIONS,
+        LONG_MAX_RETRIES,
+        LONG_MAX_DELAY,
+    )
 except ImportError:
     from agent.api import app as api_app
-    from agent.retry import with_retry, NETWORK_EXCEPTIONS
+    from agent.retry import (
+        with_retry,
+        NETWORK_EXCEPTIONS,
+        LONG_MAX_RETRIES,
+        LONG_MAX_DELAY,
+    )
 
 # Suppress google-crc32c warning (no C extension on Windows Python 3.14)
 warnings.filterwarnings("ignore", message="As the c extension couldn't be imported")
@@ -109,25 +119,55 @@ class FileSyncer(threading.Thread):
         self.device_id = device_id
         self.should_stop = False
         self.local_path = SHARED_FOLDER_PATH
+        self._consecutive_failures = 0
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
 
     def run(self):
         bucket = storage.bucket()
         prefix = f"agents/{self.device_id}/shared/"
-        
+
         while not self.should_stop:
+            # List blobs with retry; on persistent failure back off and try again
+            # later instead of crashing the syncer thread.
+            blobs = with_retry(
+                lambda: list(bucket.list_blobs(prefix=prefix)),
+                max_retries=3,
+                retry_delay=1.0,
+                max_delay=5.0,
+                operation_name="list shared blobs",
+                suppress_final_error=True,
+                should_stop=lambda: self.should_stop,
+            )
+
+            if blobs is None:
+                self._consecutive_failures += 1
+                # Quiet, exponential backoff up to 5 minutes between attempts.
+                # Only log the first failure and every 10th after that to avoid
+                # filling the console while the hotspot is down.
+                if self._consecutive_failures == 1 or self._consecutive_failures % 10 == 0:
+                    print(f"FileSyncer: network unavailable (failure #{self._consecutive_failures}), will retry.")
+                backoff = min(300, 10 * (2 ** min(self._consecutive_failures, 5)))
+                for _ in range(backoff):
+                    if self.should_stop:
+                        break
+                    time.sleep(1)
+                continue
+
+            if self._consecutive_failures > 0:
+                print("FileSyncer: network restored, resuming sync.")
+                self._consecutive_failures = 0
+
             try:
-                blobs = list(bucket.list_blobs(prefix=prefix))
-                
                 # Remote -> Local Sync
                 for blob in blobs:
                     filename = os.path.basename(blob.name)
-                    if not filename: continue 
-                    
+                    if not filename:
+                        continue
+
                     local_file_path = os.path.join(self.local_path, filename)
                     remote_mtime = blob.updated.timestamp()
-                    
+
                     download = False
                     if not os.path.exists(local_file_path):
                         download = True
@@ -137,24 +177,25 @@ class FileSyncer(threading.Thread):
                         if remote_mtime > local_mtime:
                             download = True
                             print(f"File updated: {filename}")
-                    
+
                     if download:
                         print(f"Downloading {filename}...")
-                        
-                        def do_download():
-                            blob.download_to_filename(local_file_path)
-                            os.utime(local_file_path, (remote_mtime, remote_mtime))
-                        
+
+                        def do_download(b=blob, p=local_file_path, mt=remote_mtime):
+                            b.download_to_filename(p)
+                            os.utime(p, (mt, mt))
+
                         with_retry(
                             do_download,
                             operation_name=f"download {filename}",
-                            suppress_final_error=True
+                            suppress_final_error=True,
+                            should_stop=lambda: self.should_stop,
                         )
 
                 # Local -> Remote Sync (Deletion)
                 remote_filenames = {os.path.basename(b.name) for b in blobs if os.path.basename(b.name)}
                 local_filenames = set(os.listdir(self.local_path))
-                
+
                 for filename in local_filenames:
                     if filename not in remote_filenames:
                         print(f"File deleted remotely, removing local: {filename}")
@@ -164,10 +205,11 @@ class FileSyncer(threading.Thread):
                             print(f"Error deleting {filename}: {e}")
 
             except Exception as e:
-                print(f"Error in FileSyncer: {e}")
-            
-            for _ in range(10): 
-                if self.should_stop: break
+                print(f"Error in FileSyncer (non-network): {type(e).__name__}: {e}")
+
+            for _ in range(10):
+                if self.should_stop:
+                    break
                 time.sleep(1)
 
     def stop(self):
@@ -222,19 +264,45 @@ class CommandExecutor(threading.Thread):
         
         print(f"[{self.cmd_id}] Executing: {command_str}")
         self.command_start_time = time.time()
-        self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
-        
+
+        # Subscribing to the doc lets us receive kill_signal / output_request
+        # events. If the subscribe fails (slow / flaky network) we still want
+        # the command to run — kill via Firestore won't work until the network
+        # recovers, but the subprocess and its output remain intact.
+        try:
+            self.kill_listener = self.cmd_ref.on_snapshot(self.on_doc_update)
+        except Exception as e:
+            print(f"[{self.cmd_id}] Failed to subscribe to command doc (will run without live kill signal): {type(e).__name__}: {e}")
+            self.kill_listener = None
+
         # Register this command in the global registry for API access
         active_commands_registry[self.cmd_id] = self
 
         try:
-            self.cmd_ref.update({
-                'status': 'processing',
-                'started_at': firestore.SERVER_TIMESTAMP
-            })
+            # Mark as processing. If the network is down we still proceed with the
+            # subprocess; the heartbeat / final-status writes will catch up later.
+            with_retry(
+                lambda: self.cmd_ref.update({
+                    'status': 'processing',
+                    'started_at': firestore.SERVER_TIMESTAMP
+                }),
+                operation_name="mark command processing",
+                log_prefix=f"[{self.cmd_id}]",
+                suppress_final_error=True,
+                should_stop=lambda: self.should_stop,
+            )
 
             if command_type == 'restart':
-                self.cmd_ref.update({'output': 'Agent restarting...', 'status': 'completed', 'completed_at': firestore.SERVER_TIMESTAMP})
+                with_retry(
+                    lambda: self.cmd_ref.update({
+                        'output': 'Agent restarting...',
+                        'status': 'completed',
+                        'completed_at': firestore.SERVER_TIMESTAMP
+                    }),
+                    operation_name="ack restart",
+                    log_prefix=f"[{self.cmd_id}]",
+                    suppress_final_error=True,
+                )
                 print("Restarting agent...")
                 time.sleep(2) # Allow time for firestore update to flush
                 os._exit(0)
@@ -248,40 +316,47 @@ class CommandExecutor(threading.Thread):
                 
                 try:
                     url = f"{API_URL}{endpoint}"
-                    
+
                     def make_api_request():
-                        return requests.request(method, url, json=body, timeout=5)
-                    
+                        return requests.request(method, url, json=body, timeout=10)
+
                     response = with_retry(
                         make_api_request,
                         exceptions=(ConnectionError, Timeout),
                         operation_name="API request",
                         log_prefix=f"[{self.cmd_id}]"
                     )
-                    
+
                     try:
                         output_data = json.dumps(response.json(), indent=2)
                     except Exception:
                         output_data = response.text
-                        
-                    self.cmd_ref.update({
-                        'output': output_data,
-                        'status': 'completed',
-                        'return_code': response.status_code,
-                        'completed_at': firestore.SERVER_TIMESTAMP
-                    })
-                    
+
+                    with_retry(
+                        lambda: self.cmd_ref.update({
+                            'output': output_data,
+                            'status': 'completed',
+                            'return_code': response.status_code,
+                            'completed_at': firestore.SERVER_TIMESTAMP
+                        }),
+                        operation_name="record API result",
+                        log_prefix=f"[{self.cmd_id}]",
+                        suppress_final_error=True,
+                    )
+
                 except Exception as e:
                     error_msg = f"Network error: {str(e)}" if isinstance(e, (ConnectionError, Timeout)) else str(e)
                     print(f"[{self.cmd_id}] API request failed: {error_msg}")
-                    try:
-                        self.cmd_ref.update({
+                    with_retry(
+                        lambda: self.cmd_ref.update({
                             'error': error_msg,
                             'status': 'completed',
                             'completed_at': firestore.SERVER_TIMESTAMP
-                        })
-                    except Exception as update_error:
-                        print(f"[{self.cmd_id}] Failed to update Firestore with error: {update_error}")
+                        }),
+                        operation_name="record API error",
+                        log_prefix=f"[{self.cmd_id}]",
+                        suppress_final_error=True,
+                    )
                 return
 
             if not command_str:
@@ -339,9 +414,12 @@ class CommandExecutor(threading.Thread):
             if self.should_stop:
                 update_data['status'] = 'cancelled'
 
-            # Retry final status update with exponential backoff
+            # Retry final status update with the long profile — losing this means
+            # the UI thinks the command is still running.
             with_retry(
                 lambda: self.cmd_ref.update(update_data),
+                max_retries=LONG_MAX_RETRIES,
+                max_delay=LONG_MAX_DELAY,
                 operation_name="update final status",
                 log_prefix=f"[{self.cmd_id}]",
                 suppress_final_error=True
@@ -367,7 +445,10 @@ class CommandExecutor(threading.Thread):
             )
         finally:
             if self.kill_listener:
-                self.kill_listener.unsubscribe()
+                try:
+                    self.kill_listener.unsubscribe()
+                except Exception as e:
+                    print(f"[{self.cmd_id}] Error unsubscribing kill listener: {type(e).__name__}: {e}")
             if self.process and self.process.poll() is None:
                  self.process.terminate()
             # Unregister after a delay to allow API access to final output
@@ -378,37 +459,50 @@ class CommandExecutor(threading.Thread):
             threading.Thread(target=cleanup, daemon=True).start()
 
     def send_heartbeat(self):
-        """Send minimal heartbeat to show command is still alive. No output written."""
+        """Send a minimal heartbeat to show the command is still alive.
+
+        Output stays in memory; we only push timestamp + line counts. The retry
+        budget is intentionally small so a long outage doesn't stall the polling
+        loop (which needs to detect when the subprocess exits). On failure we
+        leave ``last_heartbeat`` unchanged so the next loop iteration retries.
+        """
         current_time = time.time()
         elapsed = current_time - self.last_heartbeat
-        
-        # Only send heartbeat periodically to minimize writes
+
         if elapsed < self.heartbeat_interval:
             return
-        
-        # Minimal update - just timestamp and line counts (no output)
-        try:
-            self.cmd_ref.update({
+
+        result = with_retry(
+            lambda: self.cmd_ref.update({
                 'last_activity': firestore.SERVER_TIMESTAMP,
                 'output_lines': len(self.output_buffer),
                 'error_lines': len(self.error_buffer)
-            })
+            }),
+            max_retries=2,
+            retry_delay=0.5,
+            max_delay=2.0,
+            operation_name="command heartbeat",
+            log_prefix=f"[{self.cmd_id}]",
+            suppress_final_error=True,
+            should_stop=lambda: self.should_stop,
+        )
+        if result is not None:
             self.last_heartbeat = current_time
-        except (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
-            print(f"[{self.cmd_id}] Network error in heartbeat (will retry): {e}")
-        except Exception as e:
-            print(f"[{self.cmd_id}] Error in heartbeat: {e}")
-    
+        else:
+            # Back off a little so we don't hammer a failing network every second,
+            # but stay well under heartbeat_interval so we resume quickly on recovery.
+            self.last_heartbeat = current_time - max(self.heartbeat_interval - 10, 0)
+
     def write_final_output(self):
         """Write final output when command completes. Called once at the end."""
         stdout, stderr = self.get_all_output()
-        
+
         # Truncate to max size (keep the end, which is most recent)
         if len(stdout) > self.max_output_chars:
             stdout = "... (truncated)\n" + stdout[-self.max_output_chars:]
         if len(stderr) > self.max_output_chars:
             stderr = "... (truncated)\n" + stderr[-self.max_output_chars:]
-        
+
         update_data = {
             'last_activity': firestore.SERVER_TIMESTAMP,
             'output_lines': len(self.output_buffer),
@@ -418,11 +512,17 @@ class CommandExecutor(threading.Thread):
             update_data['output'] = stdout
         if stderr:
             update_data['error'] = stderr
-        
-        try:
-            self.cmd_ref.update(update_data)
-        except Exception as e:
-            print(f"[{self.cmd_id}] Error writing final output: {e}")
+
+        # The final output is important — use the long retry profile so we
+        # don't drop it when the network is slow but eventually reachable.
+        with_retry(
+            lambda: self.cmd_ref.update(update_data),
+            max_retries=LONG_MAX_RETRIES,
+            max_delay=LONG_MAX_DELAY,
+            operation_name="write final output",
+            log_prefix=f"[{self.cmd_id}]",
+            suppress_final_error=True,
+        )
     
     def get_recent_output(self, seconds=60):
         """Get output from the last N seconds. Returns (stdout, stderr) as strings."""
@@ -489,6 +589,7 @@ class Agent:
         self.running = True
         self.doc_ref = db.collection('devices').document(self.device_id)
         self.watch = None
+        self.device_watch = None
         self.active_commands = {} # cmd_id -> CommandExecutor
         self.last_activity_time = time.time()
         self.file_syncer = FileSyncer(device_id)
@@ -503,31 +604,56 @@ class Agent:
         self.sleep_polling_rate = agent_config.get('sleep_polling_rate', 60)
         self.idle_timeout = agent_config.get('idle_timeout', 60)
 
-        self.doc_ref.on_snapshot(self.on_device_update)
+        # Subscribe to the device document for config updates. If this throws
+        # synchronously (e.g. the network is dead at startup) we want to keep
+        # the agent alive — config changes via the snapshot are optional, and
+        # the rest of the agent can still execute commands and heartbeat.
+        try:
+            self.device_watch = self.doc_ref.on_snapshot(self.on_device_update)
+        except Exception as e:
+            print(f"Failed to subscribe to device config updates (will run with current config): {type(e).__name__}: {e}")
     
     def load_config_from_firestore(self):
-        """Load configuration from Firestore device document on boot."""
+        """Load configuration from Firestore device document on boot.
+
+        Retries briefly on transient network errors, then falls back to defaults
+        so a slow network at boot doesn't block the agent indefinitely — the
+        ``on_device_update`` snapshot listener will update config later when the
+        network recovers.
+        """
         global agent_config
         print("Loading configuration from Firestore...")
+
+        doc_snapshot = with_retry(
+            lambda: self.doc_ref.get(),
+            max_retries=3,
+            retry_delay=2.0,
+            max_delay=10.0,
+            operation_name="load config",
+            suppress_final_error=True,
+        )
+
+        if doc_snapshot is None:
+            print("Could not reach Firestore for config — using defaults; "
+                  "live config will apply when the network recovers.")
+            return
+
         try:
-            doc_snapshot = self.doc_ref.get()
             if doc_snapshot.exists:
                 data = doc_snapshot.to_dict()
-                
-                # Update config with values from Firestore if they exist
-                config_keys = ['polling_rate', 'sleep_polling_rate', 'idle_timeout', 
+                config_keys = ['polling_rate', 'sleep_polling_rate', 'idle_timeout',
                              'heartbeat_interval', 'max_output_chars']
-                
+
                 for key in config_keys:
                     if key in data and data[key] is not None:
                         agent_config[key] = data[key]
                         print(f"  Config loaded: {key} = {data[key]}")
-                
-                print(f"Configuration loaded successfully.")
+
+                print("Configuration loaded successfully.")
             else:
                 print("No existing device document found. Using default configuration.")
         except Exception as e:
-            print(f"Error loading config from Firestore: {e}")
+            print(f"Error parsing config from Firestore: {type(e).__name__}: {e}")
             print("Using default configuration.")
 
     def on_device_update(self, doc_snapshot, changes, read_time):
@@ -575,12 +701,14 @@ class Agent:
     def cleanup_stale_commands(self):
         """Clean up any pending or processing commands from previous runs."""
         print("Cleaning up stale commands...")
-        try:
+
+        def build_and_commit():
             batch = db.batch()
             commands_ref = self.doc_ref.collection('commands')
-            
-            # Find processing commands
-            processing_docs = commands_ref.where(field_path='status', op_string='==', value='processing').get()
+
+            processing_docs = list(commands_ref.where(
+                field_path='status', op_string='==', value='processing'
+            ).get())
             count = 0
             for doc in processing_docs:
                 batch.update(doc.reference, {
@@ -590,9 +718,10 @@ class Agent:
                     'error': 'Agent restarted'
                 })
                 count += 1
-            
-            # Find pending commands
-            pending_docs = commands_ref.where(field_path='status', op_string='==', value='pending').get()
+
+            pending_docs = list(commands_ref.where(
+                field_path='status', op_string='==', value='pending'
+            ).get())
             for doc in pending_docs:
                 batch.update(doc.reference, {
                     'status': 'cancelled',
@@ -601,13 +730,20 @@ class Agent:
                     'error': 'Agent restarted'
                 })
                 count += 1
-            
+
             if count > 0:
                 batch.commit()
                 print(f"Cleaned up {count} stale commands.")
-                
-        except Exception as e:
-            print(f"Error cleaning up stale commands: {e}")
+
+        with_retry(
+            build_and_commit,
+            max_retries=5,
+            retry_delay=2.0,
+            max_delay=15.0,
+            operation_name="cleanup stale commands",
+            suppress_final_error=True,
+            should_stop=lambda: not self.running,
+        )
 
     def register(self):
         """Register device with retry logic for network failures."""
@@ -631,24 +767,37 @@ class Agent:
             'allowed_emails': ALLOWED_EMAILS.split(',') if ALLOWED_EMAILS else []
         }
         
-        result = with_retry(
+        with_retry(
             lambda: self.doc_ref.set(data, merge=True),
+            max_retries=LONG_MAX_RETRIES,
             retry_delay=2,
+            max_delay=LONG_MAX_DELAY,
             operation_name="register device",
-            suppress_final_error=True
+            suppress_final_error=True,
+            should_stop=lambda: not self.running,
         )
-        
-        if result is not None or True:  # set() returns None on success
-            # Cleanup stale commands after successful registration
-            self.cleanup_stale_commands()
-            print(f"Device {self.device_id} registered.")
+
+        # Cleanup stale commands regardless of registration outcome — they are
+        # leftovers from a previous agent process and we want them resolved
+        # whether or not the initial registration write went through.
+        self.cleanup_stale_commands()
+        print(f"Device {self.device_id} registered.")
 
     def start_watching(self):
-        if not self.watch:
-             print("Starting real-time listener...")
-             commands_ref = self.doc_ref.collection('commands').where(field_path='status', op_string='==', value='pending')
-             self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
-             self.last_listener_event = time.time()
+        if self.watch:
+            return
+        print("Starting real-time listener...")
+        try:
+            commands_ref = self.doc_ref.collection('commands').where(field_path='status', op_string='==', value='pending')
+            self.watch = commands_ref.on_snapshot(self.on_command_snapshot)
+            self.last_listener_event = time.time()
+        except Exception as e:
+            # on_snapshot can fail synchronously if the underlying gRPC stream
+            # can't be established (DNS, TLS, transient 5xx). Don't crash — we
+            # will retry from check_listener_health, and the fallback poll keeps
+            # pulling pending commands in the meantime.
+            print(f"Failed to start real-time listener (will retry): {type(e).__name__}: {e}")
+            self.watch = None
 
     def stop_watching(self):
         if self.watch:
@@ -666,6 +815,9 @@ class Agent:
         self.stop_watching()
         time.sleep(1)  # Brief pause before reconnecting
         self.start_watching()
+        # Reset the timer even if start failed — check_listener_health will try
+        # again on its next pass without spamming restarts every cycle.
+        self.last_listener_event = time.time()
 
     def check_listener_health(self):
         """
@@ -691,20 +843,30 @@ class Agent:
         Fallback polling: directly query Firestore for pending commands.
         Picks up commands the real-time listener may have silently missed.
         """
-        try:
-            pending_docs = (
+        def do_query():
+            return list(
                 self.doc_ref.collection('commands')
                 .where(field_path='status', op_string='==', value='pending')
                 .get()
             )
-            for doc in pending_docs:
-                cmd_id = doc.id
-                if cmd_id not in self.active_commands:
-                    cmd_data = doc.to_dict()
-                    print(f"[poll fallback] Found missed pending command: {cmd_id}")
-                    self.start_command(cmd_id, cmd_data)
-        except Exception as e:
-            print(f"Error in fallback poll: {e}")
+
+        pending_docs = with_retry(
+            do_query,
+            max_retries=3,
+            retry_delay=1.0,
+            max_delay=5.0,
+            operation_name="poll pending commands",
+            suppress_final_error=True,
+            should_stop=lambda: not self.running,
+        )
+        if not pending_docs:
+            return
+        for doc in pending_docs:
+            cmd_id = doc.id
+            if cmd_id not in self.active_commands:
+                cmd_data = doc.to_dict()
+                print(f"[poll fallback] Found missed pending command: {cmd_id}")
+                self.start_command(cmd_id, cmd_data)
 
     def has_pending_commands(self):
         try:
@@ -715,7 +877,12 @@ class Agent:
             return False
 
     def send_heartbeat(self):
-        """Send heartbeat with graceful error handling."""
+        """Send heartbeat with graceful error handling.
+
+        Kept on a short retry budget so the main polling loop can't get stuck
+        here during a network outage — the next loop iteration will retry, and
+        meanwhile running commands continue executing in their own threads.
+        """
         try:
             info = self.fetch_agent_info()
             update_data = {
@@ -725,12 +892,15 @@ class Agent:
             }
             if info.get('git'):
                 update_data['git'] = info.get('git')
-            
+
             with_retry(
                 lambda: self.doc_ref.update(update_data),
                 max_retries=2,
+                retry_delay=1.0,
+                max_delay=3.0,
                 operation_name="send heartbeat",
-                suppress_final_error=True
+                suppress_final_error=True,
+                should_stop=lambda: not self.running,
             )
         except Exception as e:
             print(f"Error preparing heartbeat: {e}")
@@ -783,9 +953,18 @@ class Agent:
     def run_startup_file(self):
         """Check for and execute the startup file if configured."""
         try:
-            # Get the device document to check for startup_file
-            doc_snapshot = self.doc_ref.get()
-            if not doc_snapshot.exists:
+            # Get the device document to check for startup_file. If the network
+            # is down at boot, skip startup-file execution rather than crashing
+            # — the user can re-trigger it once connectivity returns.
+            doc_snapshot = with_retry(
+                lambda: self.doc_ref.get(),
+                max_retries=3,
+                retry_delay=2.0,
+                max_delay=10.0,
+                operation_name="load startup_file config",
+                suppress_final_error=True,
+            )
+            if doc_snapshot is None or not doc_snapshot.exists:
                 return
             
             data = doc_snapshot.to_dict()
@@ -835,9 +1014,17 @@ class Agent:
                 'is_startup': True
             }
             
-            # Create the document first
-            self.doc_ref.collection('commands').document(cmd_id).set(cmd_data)
-            
+            # Create the document first — best-effort; if it fails the command
+            # still runs locally and the next heartbeat / final write will sync.
+            with_retry(
+                lambda: self.doc_ref.collection('commands').document(cmd_id).set(cmd_data),
+                max_retries=5,
+                retry_delay=2.0,
+                max_delay=15.0,
+                operation_name="create startup command doc",
+                suppress_final_error=True,
+            )
+
             # Execute using the standard command executor
             print(f"Queueing startup command: {command}")
             self.start_command(cmd_id, cmd_data)

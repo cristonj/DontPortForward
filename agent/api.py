@@ -7,10 +7,18 @@ import platform
 import subprocess
 import os
 import socket
+import time
+import threading
 
 # Command registry - will be set by main.py after initialization
 # This avoids circular import issues
 active_commands_registry = {}
+
+# Cache for outbound IP address: probing the network on every /status call adds
+# multi-second latency on a slow / down hotspot. Refresh at most every 5 min.
+_IP_CACHE_TTL = 300.0
+_ip_cache: dict = {"ip": None, "ts": 0.0}
+_ip_lock = threading.Lock()
 
 app = FastAPI(
     title="DontPortForward Agent API",
@@ -38,27 +46,42 @@ class FileWriteRequest(BaseModel):
     path: str
     content: str
 
-def get_ip_address():
-    """
-    Retrieves the primary IP address of the device.
-    Uses a connection to a public DNS server (8.8.8.8) to determine the
-    local IP address used for outbound traffic. This does not actually
-    establish a connection.
-    Gracefully handles network failures by falling back to localhost.
+def _probe_ip_address() -> str:
+    """Probe the primary outbound IP via a UDP socket to 8.8.8.8.
+
+    No packets are actually sent — this just consults the kernel routing table.
+    Returns ``127.0.0.1`` on any failure (e.g. the hotspot is down).
     """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(2)  # Set timeout to avoid hanging
+        s.settimeout(1)  # Keep this tight — we don't want to stall heartbeats.
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except (socket.timeout, socket.error, OSError) as e:
-        # Network error - fallback to localhost
-        return "127.0.0.1"
     except Exception:
-        # Any other error - fallback to localhost
         return "127.0.0.1"
+
+
+def get_ip_address() -> str:
+    """Return the primary outbound IP, cached to avoid per-call latency.
+
+    On a slow / intermittent network the probe can take up to its full timeout
+    every time, which adds up across frequent heartbeats. Caching keeps /status
+    responsive even when connectivity is bad.
+    """
+    now = time.time()
+    with _ip_lock:
+        if _ip_cache["ip"] and (now - _ip_cache["ts"]) < _IP_CACHE_TTL:
+            return _ip_cache["ip"]
+    ip = _probe_ip_address()
+    with _ip_lock:
+        # Only overwrite a previously good IP with a new good IP, but always
+        # refresh the timestamp so we don't re-probe in a tight loop while down.
+        if ip != "127.0.0.1" or not _ip_cache["ip"]:
+            _ip_cache["ip"] = ip
+        _ip_cache["ts"] = now
+        return _ip_cache["ip"] or ip
 
 def get_git_info():
     """Collect git status information."""
